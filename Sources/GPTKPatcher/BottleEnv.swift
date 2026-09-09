@@ -22,59 +22,65 @@ enum CXConfig {
     }
 
     private static func isSectionHeader(_ line: String) -> Bool {
-        line.caseInsensitiveCompare(section) == .orderedSame
+        guard let end = line.firstIndex(of: "]") else { return false }
+        let suffix = line[line.index(after: end)...].trimmingCharacters(in: .whitespaces)
+        return String(line[...end]).caseInsensitiveCompare(section) == .orderedSame
+            && (suffix.isEmpty || suffix.hasPrefix(";") || suffix.hasPrefix("#"))
     }
 
-    /// Sets `"key" = "value"`; a `nil` value removes the key. Creates the section when needed.
-    /// The first edit of a file keeps a `<name>.gptkpatcher.bak` copy next to it.
-    /// Returns true when the file changed.
     @discardableResult
     static func set(_ key: String, to value: String?, in conf: URL) throws -> Bool {
+        try apply([(key, value)], to: conf).contains(key)
+    }
+
+    /// Edits all requested keys with one atomic write. Repeated sections are legal in CrossOver;
+    /// remove shadowed assignments in every section so a later one cannot silently win.
+    @discardableResult
+    static func apply(_ assignments: [(String, String?)], to conf: URL) throws -> [String] {
         let original = try String(contentsOf: conf, encoding: .utf8)
-        var lines = original.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
-
-        let header: Int
-        if let existingHeader = lines.firstIndex(where: { isSectionHeader($0.trimmingCharacters(in: .whitespaces)) }) {
-            header = existingHeader
-        } else {
-            guard value != nil else { return false }
-            // Append the section at the end, separated from the previous one by a blank line.
-            if !(lines.last ?? "").isEmpty { lines.append("") }
-            if lines.count >= 2, !lines[lines.count - 2].isEmpty { lines.insert("", at: lines.count - 1) }
-            lines.insert(section, at: lines.count - 1)
-            header = lines.count - 2
-        }
-
-        var end = lines.count
-        for i in (header + 1)..<lines.count where lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("[") {
-            end = i
-            break
-        }
-        // Every line for the key; CrossOver honours the last one, so that is the one kept.
-        let matches = ((header + 1)..<end).filter {
-            parseAssignment(lines[$0].trimmingCharacters(in: .whitespaces))?.0.caseInsensitiveCompare(key) == .orderedSame
-        }
-        let duplicates = matches.dropLast()
-
-        if let value {
-            let assignment = "\"\(key)\" = \"\(value)\""
-            if let existing = matches.last {
-                if lines[existing].trimmingCharacters(in: .whitespaces) == assignment, duplicates.isEmpty { return false }
-                lines[existing] = assignment
-            } else {
-                var insertAt = end
-                while insertAt > header + 1, lines[insertAt - 1].trimmingCharacters(in: .whitespaces).isEmpty { insertAt -= 1 }
-                lines.insert(assignment, at: insertAt)
+        let newline = original.contains("\r\n") ? "\r\n" : "\n"
+        var text = original.replacingOccurrences(of: "\r\n", with: "\n")
+        var changed: [String] = []
+        for (key, value) in assignments {
+            guard key.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil,
+                  value?.rangeOfCharacter(from: CharacterSet(charactersIn: "\"\\").union(.controlCharacters)) == nil else {
+                throw PatchError.io("Invalid CrossOver setting.")
             }
-            for index in duplicates.reversed() { lines.remove(at: index) }
-        } else {
-            guard !matches.isEmpty else { return false }
-            for index in matches.reversed() { lines.remove(at: index) }
+            var lines = text.components(separatedBy: "\n")
+            var headers: [Int] = []
+            var matches: [Int] = []
+            var inSection = false
+            for (index, line) in lines.enumerated() {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("[") {
+                    inSection = isSectionHeader(trimmed)
+                    if inSection { headers.append(index) }
+                } else if inSection, parseAssignment(trimmed)?.0.caseInsensitiveCompare(key) == .orderedSame {
+                    matches.append(index)
+                }
+            }
+            if let value {
+                let assignment = "\"\(key)\" = \"\(value)\""
+                if let last = matches.last {
+                    lines[last] = assignment
+                    for index in matches.dropLast().reversed() { lines.remove(at: index) }
+                } else if let header = headers.last {
+                    let end = ((header + 1)..<lines.count).first { lines[$0].trimmingCharacters(in: .whitespaces).hasPrefix("[") } ?? lines.count
+                    lines.insert(assignment, at: end)
+                } else {
+                    if lines.last?.isEmpty == false { lines.append("") }
+                    lines += [section, assignment, ""]
+                }
+            } else {
+                for index in matches.reversed() { lines.remove(at: index) }
+            }
+            let updated = lines.joined(separator: "\n")
+            if updated != text { changed.append(key); text = updated }
         }
-
+        guard !changed.isEmpty else { return [] }
         try backupOnce(conf)
-        try lines.joined(separator: "\n").write(to: conf, atomically: true, encoding: .utf8)
-        return true
+        try text.replacingOccurrences(of: "\n", with: newline).write(to: conf, atomically: true, encoding: .utf8)
+        return changed
     }
 
     private static func backupOnce(_ conf: URL) throws {
@@ -190,7 +196,7 @@ enum BottleEnv {
         var pids: [Int32] = []
         for line in list.stdout.split(separator: "\n") {
             let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1)
-            guard parts.count == 2, let pid = Int32(parts[0]), parts[1].hasPrefix(folder) else { continue }
+            guard parts.count == 2, let pid = Int32(parts[0]), parts[1].hasPrefix(folder + "/") else { continue }
             pids.append(pid)
         }
         return pids
@@ -208,11 +214,28 @@ enum BottleEnv {
         listBottles().compactMap(runningBottle(for:))
     }
 
-    /// Bottle sessions started from the given CrossOver app. After that app is renamed or moved
-    /// they become stale, so they are ended before an in-place patch renames the app.
+    /// Bottle sessions started from the given CrossOver app, used by scoped settings controls.
     static func runningBottles(startedFrom app: URL) -> [RunningBottle] {
         let root = app.appendingPathComponent("Contents/SharedSupport/CrossOver").standardizedFileURL.path
         return runningBottles().filter { $0.cxRoot.map { URL(fileURLWithPath: $0).standardizedFileURL.path == root } ?? false }
+    }
+
+    /// Checks open files as well as executable paths, so orphaned Wine clients are included
+    /// even after their wineserver has exited. No processes are stopped by this check.
+    static func isUsingApp(_ app: URL) -> Bool {
+        guard let list = try? Shell.run("/bin/ps", ["-axo", "pid=,comm="], timeout: 20) else { return true }
+        let root = app.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+        var candidates: [String] = []
+        for line in list.stdout.split(separator: "\n") {
+            let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1)
+            guard parts.count == 2, let pid = Int32(parts[0]), pid != getpid() else { continue }
+            if parts[1].hasPrefix(root) { return true }
+            let command = parts[1].lowercased()
+            if command.hasSuffix(".exe") || command.contains("wine") { candidates.append(String(pid)) }
+        }
+        guard !candidates.isEmpty else { return false }
+        guard let files = try? Shell.run("/usr/sbin/lsof", ["-Fpn", "-p", candidates.joined(separator: ",")], timeout: 30) else { return true }
+        return files.stdout.split(separator: "\n").contains { $0.hasPrefix("n" + root) }
     }
 
     /// Ends everything in the bottle the way CrossOver's own Quit does, then makes sure of it.
@@ -252,8 +275,8 @@ enum BottleEnv {
 }
 
 /// How a bottle handles Metal 4 in D3DMetal. D3DMetal reads `D3DM_MTL4` once per process with
-/// `atoi`, so only an explicit value is reliable: an absent variable means "default", which on
-/// macOS 27 with GPTK 4 is on. Turning it off requires writing "0", not removing the line.
+/// `atoi`: an absent variable means the toolkit's default. Turning it off requires writing "0",
+/// not removing the line.
 enum Metal4Mode: String, CaseIterable, Identifiable {
     case automatic, on, off
     var id: String { rawValue }
@@ -280,12 +303,9 @@ enum Metal4Mode: String, CaseIterable, Identifiable {
         return (Int(stored.trimmingCharacters(in: .whitespaces)) ?? 0) != 0 ? .on : .off
     }
 
-    /// What "Default" means on the running macOS, matching D3DMetal 4's own rule.
+    /// The default is chosen by the installed toolkit, not by this UI.
     static var defaultDescription: String {
-        let running = ProcessInfo.processInfo.operatingSystemVersion
-        return running.majorVersion >= 27
-            ? "Default is on with GPTK 4 on macOS \(running.majorVersion). Choose Off to turn it off; removing the line does not."
-            : "Metal 4 needs macOS 27; on this Mac it stays off."
+        "Default lets the installed toolkit choose. On and Off explicitly request a mode; availability depends on the toolkit and macOS version."
     }
 }
 
@@ -315,11 +335,6 @@ struct GraphicsSettings: Sendable, Equatable {
     /// Writes the settings into one config file and reports what changed. Existing values for
     /// switches this request doesn't set (a cap set earlier from the options popover) are kept.
     func apply(to conf: URL) throws -> [String] {
-        var changes: [String] = []
-        for (key, value) in assignments {
-            guard let value else { continue }
-            if try CXConfig.set(key, to: value, in: conf) { changes.append("\(key)=\(value)") }
-        }
-        return changes
+        try CXConfig.apply(assignments.filter { $0.value != nil }, to: conf)
     }
 }

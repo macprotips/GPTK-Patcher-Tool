@@ -18,11 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// back, and quit once that has finished.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let engine = PatchEngine.shared
-        guard engine.isRunning else { return .terminateNow }
+        guard engine.isBusy || OperationLock.isHeld else { return .terminateNow }
         engine.cancel()
         Task { @MainActor in
-            let deadline = Date().addingTimeInterval(120)
-            while engine.isRunning, Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
+            while engine.isBusy || OperationLock.isHeld { try? await Task.sleep(for: .milliseconds(100)) }
             NSApp.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
@@ -69,7 +68,7 @@ enum HeadlessRunner {
         exit(0)
     }
 
-    private static let usage = "usage: GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version> [destination.app] [--in-place] [--replace] [--fps N] [--hud] [--no-copy-env] [--bottle NAME]...\n       GPTKPatcher --cli --quit-bottle <name> | --bottle-status <name>\n"
+    private static let usage = "usage: GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version> [destination.app] [--in-place] [--replace] [--fps N] [--hud] [--no-copy-env] [--bottle NAME]...\n       GPTKPatcher --cli --repair <patched.app>\n       GPTKPatcher --cli --quit-bottle <name> | --bottle-status <name>\n"
 
     private static func fail(_ message: String, status: Int32 = 1) -> Never {
         FileHandle.standardError.write(Data("error: \(message)\n".utf8))
@@ -80,9 +79,24 @@ enum HeadlessRunner {
         var args = Array(CommandLine.arguments.dropFirst())
         args.removeAll { $0 == "--cli" }
         if args.contains("--help") || args.contains("-h") { print(usage, terminator: ""); exit(0) }
+        if args.contains("--repair") {
+            guard args.count == 2, args[0] == "--repair", !args[1].hasPrefix("-") else {
+                fail("Use --repair with exactly one patched app path.", status: 64)
+            }
+            do {
+                let token = CancellationToken()
+                let signals = SignalCancellation(token: token)
+                defer { signals.stop() }
+                try AppSigning.repair(CrossOverBundle(url: URL(fileURLWithPath: args[1])), token: token, log: { print($0) })
+                print("Launch repair complete. Open the app from its current location.")
+                exit(0)
+            } catch { fail(error.localizedDescription, status: error is CancellationError ? 130 : 1) }
+        }
         for flag in ["--quit-bottle", "--bottle-status"] where args.contains(flag) {
-            guard let index = args.firstIndex(of: flag), index + 1 < args.count else { fail("\(flag) needs a bottle name", status: 64) }
-            quitBottleAndExit(named: args[index + 1], dryRun: flag == "--bottle-status")
+            guard args.count == 2, args[0] == flag, !args[1].hasPrefix("-") else {
+                fail("Use \(flag) with exactly one bottle name and no patch options.", status: 64)
+            }
+            quitBottleAndExit(named: args[1], dryRun: flag == "--bottle-status")
         }
         var replace = false
         var inPlace = false
@@ -117,7 +131,11 @@ enum HeadlessRunner {
         }
         if !inPlace, !positional[2].lowercased().hasSuffix(".app") { fail("the destination must end in .app", status: 64) }
         do {
+            let token = CancellationToken()
+            let signals = SignalCancellation(token: token)
+            defer { signals.stop() }
             let crossOver = try CrossOverBundle(url: URL(fileURLWithPath: positional[0]))
+            if !inPlace { try PatchJob.validateDestination(URL(fileURLWithPath: positional[2]), source: crossOver.url) }
             if inPlace {
                 let name = crossOver.url.lastPathComponent
                 let open = NSRunningApplication.runningApplications(withBundleIdentifier: crossOver.identifier).contains {
@@ -127,13 +145,10 @@ enum HeadlessRunner {
                 }
                 if open { fail("\(name) is running. Quit it before patching it in place.") }
             }
-            if crossOver.needsFirstLaunch {
-                print("note: \(crossOver.url.lastPathComponent) has never been opened. It will be opened once so macOS can verify it; click Open if asked.")
-            }
             let toolkitArg = positional[1]
             let toolkit: Toolkit
             if toolkitArg.lowercased().hasSuffix(".dmg") {
-                toolkit = try ToolkitLibrary.importImage(URL(fileURLWithPath: toolkitArg)) { print($0) }
+                toolkit = try ToolkitLibrary.importImage(URL(fileURLWithPath: toolkitArg), token: token) { print($0) }
             } else if let stored = ToolkitLibrary.list().first(where: { $0.version == toolkitArg || $0.displayName == toolkitArg }) {
                 toolkit = stored
             } else {
@@ -153,13 +168,13 @@ enum HeadlessRunner {
                 replaceExisting: replace,
                 graphics: GraphicsSettings(fpsCap: fps, metalHUD: hud, storeInCopy: storeInCopy),
                 bottles: bottles)
-            let result = try PatchJob(request: request) { print($0) }.run()
+            let result = try PatchJob(request: request, log: { print($0) }, token: token).run()
             PatchedAppRegistry.remember(result)
             print(result.path)
             exit(0)
         } catch {
             FileHandle.standardError.write(Data("error: \(error.localizedDescription)\n".utf8))
-            exit(1)
+            exit(error is CancellationError ? 130 : 1)
         }
     }
 }

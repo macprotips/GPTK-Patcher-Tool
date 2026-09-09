@@ -10,6 +10,23 @@ struct Toolkit: Identifiable, Hashable, Sendable {
 
     var id: String { version }
     var displayName: String { "GPTK \(version)" }
+
+    var compatibilityIssue: String? {
+        Self.compatibilityIssue(version: version, minimumOS: D3DMetalInfo.read(inLib: lib).minimumOS ?? minimumOS)
+    }
+
+    static func compatibilityIssue(version: String, minimumOS: String?,
+                                   running: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion) -> String? {
+        guard let minimumOS else { return nil }
+        let parts = minimumOS.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
+        guard (1...3).contains(parts.count), parts.allSatisfy({ $0 != nil && $0! >= 0 }) else {
+            return "GPTK \(version) has an unreadable minimum macOS version. Import the disk image again."
+        }
+        let required = parts.map { $0! } + Array(repeating: 0, count: 3 - parts.count)
+        let current = [running.majorVersion, running.minorVersion, running.patchVersion]
+        guard current.lexicographicallyPrecedes(required) else { return nil }
+        return "GPTK \(version) requires macOS \(minimumOS) or later. This Mac runs macOS \(running.majorVersion).\(running.minorVersion). Choose a compatible toolkit before patching."
+    }
 }
 
 /// Keeps imported toolkits in ~/Library/Application Support/GPTKPatcher/Toolkits/<version>/.
@@ -27,12 +44,13 @@ enum ToolkitLibrary {
         var sourceName: String?
     }
 
-    static func list() -> [Toolkit] {
+    static func list(directory: URL = Self.directory) -> [Toolkit] {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: directory.path) else { return [] }
         let toolkits: [Toolkit] = names.compactMap { name in
             guard !name.hasPrefix(".") else { return nil }   // an import in progress, or one that never finished
             let lib = directory.appendingPathComponent(name, isDirectory: true)
+            guard FileSafety.contains(lib, in: directory) else { return nil }
             guard GPTKSource.isValidLib(lib) else { return nil }
             let manifest = readManifest(in: lib)
             let info = D3DMetalInfo.read(inLib: lib)
@@ -41,7 +59,7 @@ enum ToolkitLibrary {
                 version: manifest?.version ?? info.version ?? name,
                 lib: lib,
                 importedAt: manifest?.importedAt ?? (attrs?[.creationDate] as? Date) ?? .distantPast,
-                minimumOS: manifest?.minimumOS ?? info.minimumOS,
+                minimumOS: info.minimumOS ?? manifest?.minimumOS,
                 sourceName: manifest?.sourceName)
         }
         return toolkits.sorted { $0.version.compare($1.version, options: .numeric) == .orderedDescending }
@@ -49,35 +67,47 @@ enum ToolkitLibrary {
 
     /// Mounts the image, copies its payload into the library and returns the stored toolkit.
     /// A version that is already in the library is returned as-is without copying again.
-    static func importImage(_ dmg: URL, log: (String) -> Void) throws -> Toolkit {
-        let payload = try GPTKSource.locate(dmg: dmg, log: log)
+    static func importImage(_ dmg: URL, directory: URL = Self.directory, token: CancellationToken? = nil,
+                            log: (String) -> Void) throws -> Toolkit {
+        let lock = try OperationLock()
+        defer { lock.unlock() }
+        let payload = try GPTKSource.locate(dmg: dmg, token: token, log: log)
         defer { payload.detachAll(log: log) }
 
         let fm = FileManager.default
         let target = directory.appendingPathComponent(payload.version, isDirectory: true)
+        try FileSafety.requireContained(target, in: directory)
         if GPTKSource.isValidLib(target) {
             log("GPTK \(payload.version) is already in the library.")
-            return list().first { $0.version == payload.version }
+            return list(directory: directory).first { $0.version == payload.version }
                 ?? Toolkit(version: payload.version, lib: target, importedAt: Date(), minimumOS: payload.minimumOS, sourceName: dmg.lastPathComponent)
         }
 
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
-        let staging = directory.appendingPathComponent(".importing-\(payload.version)", isDirectory: true)
-        if fm.fileExists(atPath: staging.path) { try fm.removeItem(at: staging) }
+        let staging = directory.appendingPathComponent(".importing-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: staging, withIntermediateDirectories: false)
         do {
             log("Copying GPTK \(payload.version) into the library…")
-            try Shell.check("/bin/cp", ["-Rp", payload.lib.path + "/.", staging.path])
-            try Shell.check("/bin/chmod", ["-R", "u+w", staging.path])
-            Quarantine.strip(under: staging)
+            try Shell.check("/bin/cp", ["-Rp", payload.lib.path + "/.", staging.path], token: token)
+            try Shell.check("/bin/chmod", ["-R", "u+w", staging.path], token: token)
+            try Quarantine.strip(under: staging, token: token)
+            try GPTKSource.validateLib(staging)
             let manifest = Manifest(version: payload.version, importedAt: Date(), minimumOS: payload.minimumOS, sourceName: dmg.lastPathComponent)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
             try encoder.encode(manifest).write(to: staging.appendingPathComponent("toolkit.json"))
             copyAppleDocuments(from: payload.documentsRoot, into: staging, log: log)
-            if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
-            try fm.moveItem(at: staging, to: target)
+            try token?.checkpoint()
+            let previous = directory.appendingPathComponent(".replaced-\(UUID().uuidString)")
+            let hadPrevious = FileSafety.exists(target)
+            if hadPrevious { try fm.moveItem(at: target, to: previous) }
+            do { try fm.moveItem(at: staging, to: target) }
+            catch {
+                if hadPrevious { try fm.moveItem(at: previous, to: target) }
+                throw error
+            }
+            if hadPrevious { try? fm.removeItem(at: previous) }
         } catch {
             try? fm.removeItem(at: staging)
             throw error
@@ -110,8 +140,14 @@ enum ToolkitLibrary {
         }
     }
 
-    static func remove(_ toolkit: Toolkit) throws {
-        guard toolkit.lib.path.hasPrefix(directory.path) else { return }
+    static func remove(_ toolkit: Toolkit, directory: URL = Self.directory) throws {
+        let lock = try OperationLock()
+        defer { lock.unlock() }
+        guard toolkit.lib.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+                == directory.resolvingSymlinksInPath().standardizedFileURL,
+              FileSafety.contains(toolkit.lib, in: directory) else {
+            throw PatchError.io("Refusing to remove a toolkit outside the library.")
+        }
         try FileManager.default.removeItem(at: toolkit.lib)
     }
 

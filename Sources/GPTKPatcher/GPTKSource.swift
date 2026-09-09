@@ -18,19 +18,23 @@ struct GPTKPayload: Sendable {
 enum GPTKSource {
     /// Mounts the image (and, if needed, the "Evaluation environment" image nested inside the
     /// full toolkit download) and locates the redistributable `lib` folder.
-    static func locate(dmg: URL, log: (String) -> Void) throws -> GPTKPayload {
+    static func locate(dmg: URL, token: CancellationToken? = nil, log: (String) -> Void) throws -> GPTKPayload {
         var mounts: [DiskImage] = []
         var queue: [URL] = [dmg]
         var seen = 0
         do {
             while !queue.isEmpty && seen < 4 {
+                try token?.checkpoint()
                 let image = queue.removeFirst()
                 seen += 1
-                let mount = try DiskImage.attach(image, log: log)
+                let mount = try DiskImage.attach(image, token: token, log: log)
                 mounts.append(mount)
+                try token?.checkpoint()
                 if let lib = findLib(under: mount.mountPoint) {
+                    try validateLib(lib)
                     let (version, minOS) = D3DMetalInfo.read(inLib: lib)
                     let resolved = version ?? versionFromFilename(dmg.lastPathComponent) ?? "unknown"
+                    guard FileSafety.isSafeComponent(resolved) else { throw PatchError.notGPTK("invalid toolkit version") }
                     log("Found GPTK payload at \(lib.path) (D3DMetal \(resolved))")
                     return GPTKPayload(lib: lib, version: resolved, minimumOS: minOS,
                                        documentsRoot: mount.mountPoint, mounts: mounts)
@@ -51,9 +55,38 @@ enum GPTKSource {
     }
 
     static func isValidLib(_ lib: URL) -> Bool {
-        let fm = FileManager.default
-        return fm.isDirectory(lib.appendingPathComponent("external/D3DMetal.framework"))
-            && fm.isDirectory(lib.appendingPathComponent("wine/x86_64-windows"))
+        requiredFiles.allSatisfy { FileManager.default.fileExists(atPath: lib.appendingPathComponent($0).path) }
+    }
+
+    static let requiredFiles = [
+        "external/D3DMetal.framework/Versions/A/D3DMetal",
+        "external/D3DMetal.framework/D3DMetal",
+        "wine/x86_64-windows/d3d12.dll",
+        "wine/x86_64-windows/dxgi.dll"
+    ]
+
+    static func validateLib(_ lib: URL) throws {
+        for relative in requiredFiles {
+            let file = lib.appendingPathComponent(relative)
+            guard FileManager.default.fileExists(atPath: file.path), !FileManager.default.isDirectory(file) else {
+                throw PatchError.notGPTK("\(relative) is missing. Import a complete toolkit disk image again.")
+            }
+            try FileSafety.requireContained(file, in: lib)
+        }
+        var enumerationError: Error?
+        guard let items = FileManager.default.enumerator(at: lib, includingPropertiesForKeys: [.isSymbolicLinkKey],
+            errorHandler: { _, error in enumerationError = error; return false }) else {
+            throw PatchError.notGPTK("the toolkit folder cannot be read")
+        }
+        for case let file as URL in items {
+            if try file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink == true {
+                try FileSafety.requireContained(file, in: lib)
+                guard FileManager.default.fileExists(atPath: file.path) else {
+                    throw PatchError.notGPTK("a toolkit link is broken: \(file.lastPathComponent)")
+                }
+            }
+        }
+        if let enumerationError { throw enumerationError }
     }
 
     private static func findLib(under root: URL) -> URL? {
@@ -96,14 +129,17 @@ enum D3DMetalInfo {
     /// Reads the D3DMetal framework version (and its minimum macOS) from a GPTK `lib` folder.
     static func read(inLib lib: URL) -> (version: String?, minimumOS: String?) {
         let resources = lib.appendingPathComponent("external/D3DMetal.framework/Versions/A/Resources")
+        var version: String?
+        var minimumOS: String?
         for name in ["Info.plist", "version.plist"] {
             let plist = resources.appendingPathComponent(name)
             guard let dict = NSDictionary(contentsOf: plist) as? [String: Any] else { continue }
-            let version = (dict["CFBundleShortVersionString"] as? String) ?? (dict["CFBundleVersion"] as? String)
-            if let version, !version.isEmpty {
-                return (version, dict["LSMinimumSystemVersion"] as? String)
+            if version == nil {
+                let value = (dict["CFBundleShortVersionString"] as? String) ?? (dict["CFBundleVersion"] as? String)
+                if let value, !value.isEmpty { version = value }
             }
+            minimumOS = minimumOS ?? dict["LSMinimumSystemVersion"] as? String
         }
-        return (nil, nil)
+        return (version, minimumOS)
     }
 }

@@ -50,6 +50,7 @@ struct FileTile: View {
         .accessibilityValue(accessibilityValue)
         .accessibilityHint(url == nil ? "Opens a file chooser. You can also drop a file here." : "Choose a different file.")
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: Text("Remove selection"), onClear)
     }
 
     private var emptyContent: some View {
@@ -90,7 +91,7 @@ struct FileTile: View {
             Spacer(minLength: 0)
         }
         .padding(.leading, 14)
-        .padding(.trailing, 14)
+        .padding(.trailing, 30)
     }
 
     private var detail: (text: String, isError: Bool)? {
