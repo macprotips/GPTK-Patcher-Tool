@@ -3,3 +3,5 @@ build/
 .swiftpm/
 .DS_Store
 dist/
+work/
+outputs/

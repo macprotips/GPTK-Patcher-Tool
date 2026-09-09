@@ -8,6 +8,7 @@ let package = Package(
         .executableTarget(
             name: "GPTKPatcher",
             path: "Sources/GPTKPatcher"
-        )
+        ),
+        .testTarget(name: "GPTKPatcherTests", dependencies: ["GPTKPatcher"])
     ]
 )

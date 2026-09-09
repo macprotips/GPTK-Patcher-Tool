@@ -36,21 +36,21 @@ struct PatchReceipt: Codable {
 /// Coarse phases of a patch, reported to the UI as they start. These are real boundaries in
 /// `PatchJob.run`, not a timer.
 enum PatchStep: Int, CaseIterable, Sendable {
-    case verifying, checkingToolkit, copying, installing, finalizing
+    case verifying, checkingToolkit, copying, installing, finalizing, signing
 
-    /// The order steps run in. A duplicate is verified after it exists; an existing app before it is touched.
+    /// The source is verified before copying; the modified app is verified after signing.
     static func sequence(for mode: PatchMode) -> [PatchStep] {
-        mode == .copy ? [.checkingToolkit, .copying, .verifying, .installing, .finalizing]
-                      : [.verifying, .checkingToolkit, .copying, .installing, .finalizing]
+        [.checkingToolkit, .verifying, .copying, .installing, .finalizing, .signing]
     }
 
     func title(for mode: PatchMode) -> String {
         switch self {
-        case .verifying: return "Letting macOS verify CrossOver"
+        case .verifying: return "Verifying CrossOver"
         case .checkingToolkit: return "Checking the toolkit"
         case .copying: return mode == .copy ? "Copying CrossOver" : "Preparing CrossOver"
         case .installing: return "Installing toolkit components"
         case .finalizing: return "Applying settings"
+        case .signing: return "Signing and verifying the patched app"
         }
     }
 }
@@ -59,6 +59,10 @@ enum PatchStep: Int, CaseIterable, Sendable {
 /// or in the app itself. The stored toolkit is validated before anything is touched, the stock
 /// `apple_gptk` is kept as `apple_gptk.stock`, and a failure part-way restores what was there.
 struct PatchJob {
+    static var toolVersion: String {
+        guard Bundle.main.bundleIdentifier == "com.macprotips.CrossOverGPTKPatcher" else { return "development" }
+        return Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
+    }
     let request: PatchRequest
     let log: (String) -> Void
     var onStep: (PatchStep) -> Void = { _ in }
@@ -77,35 +81,44 @@ struct PatchJob {
     /// Runs the whole job. If a step fails or the job is cancelled, a duplicate created during
     /// this run is removed and an in-place app gets its toolkit folder put back.
     func run() throws -> URL {
+        let lock = try OperationLock()
+        defer { lock.unlock() }
+        let backup = try FileBackup()
         var createdCopy: URL?
-        var rollback: (() -> Void)?
+        var replacedCopy: (original: URL, trashed: URL)?
+        var rollback: (() -> [String])?
         do {
-            return try perform(createdCopy: &createdCopy, rollback: &rollback)
+            return try perform(createdCopy: &createdCopy, replacedCopy: &replacedCopy, rollback: &rollback, backup: backup)
         } catch {
-            if let createdCopy, fm.fileExists(atPath: createdCopy.path) {
-                try? fm.removeItem(at: createdCopy)
-                log(error is CancellationError ? "Cancelled; removed the unfinished copy." : "Removed the unfinished copy.")
-            } else if let rollback {
-                rollback()
+            var failures = rollback?() ?? []
+            failures += backup.restore()
+            if let createdCopy, FileSafety.exists(createdCopy) {
+                do {
+                    try fm.removeItem(at: createdCopy)
+                    log("Removed the unfinished copy.")
+                } catch { failures.append("Could not remove \(createdCopy.path): \(error.localizedDescription)") }
             }
+            if let replacedCopy {
+                do { try fm.moveItem(at: replacedCopy.trashed, to: replacedCopy.original) }
+                catch { failures.append("The replaced app remains in the Trash at \(replacedCopy.trashed.path).") }
+            }
+            if !failures.isEmpty {
+                backup.keepForRecovery()
+                failures.forEach(log)
+                throw PatchError.io("\(error.localizedDescription) Recovery needs attention: \(failures.joined(separator: " "))")
+            }
+            log("Rolled back the patch's file changes.")
             throw error
         }
     }
 
-    /// What rollback has to undo beyond the toolkit folder: files written after the swap.
-    private final class Written {
-        var receipt: (url: URL, original: Data?)?
-        var configs: [(url: URL, original: Data)] = []
-    }
-
-    private func perform(createdCopy: inout URL?, rollback: inout (() -> Void)?) throws -> URL {
-        var src = request.crossOver
+    private func perform(createdCopy: inout URL?, replacedCopy: inout (original: URL, trashed: URL)?,
+                         rollback: inout (() -> [String])?, backup: FileBackup) throws -> URL {
+        let src = try CrossOverBundle(url: request.crossOver.url)
+        log("GPTK Patcher \(Self.toolVersion) · \(ProcessInfo.processInfo.operatingSystemVersionString) · mode: \(request.mode.rawValue)")
         log("\(src.displayVersion) (build \(src.build)) at \(src.url.path)")
-        if request.mode == .inPlace {
-            onStep(.verifying)
-            let location = try FirstLaunch.approve(src, token: token, log: log)
-            if location != src.url { src = try CrossOverBundle(url: location) }
-        }
+        if request.mode == .copy { try Self.validateDestination(request.destination, source: src.url) }
+        else { try src.requireNotRunning() }
         if src.hasARM64Wine { log("This build has ARM64 Wine too; the toolkit's D3DMetal only serves Intel (x86_64) bottles.") }
         if let stock = src.installedD3DMetalVersion { log("Stock D3DMetal in that build: \(stock)") }
         log("Graphics settings: \(request.graphics.summary)")
@@ -114,53 +127,40 @@ struct PatchJob {
         onStep(.checkingToolkit)
         try token.checkpoint()
         let toolkit = request.toolkit
-        guard GPTKSource.isValidLib(toolkit.lib) else {
-            throw PatchError.io("The library copy of GPTK \(toolkit.version) is incomplete. Remove it from the toolkit menu and import the disk image again.")
-        }
+        try GPTKSource.validateLib(toolkit.lib)
+        guard FileSafety.isSafeComponent(toolkit.version) else { throw PatchError.notGPTK("invalid version") }
+        if let issue = toolkit.compatibilityIssue { throw PatchError.io(issue) }
         let installedVersion = D3DMetalInfo.read(inLib: toolkit.lib).version ?? toolkit.version
         log("Toolkit: GPTK \(toolkit.version) (D3DMetal \(installedVersion)) from the library")
-        logMinimumOS(version: toolkit.version, minimum: toolkit.minimumOS)
+        guard FileSafety.isSafeComponent(installedVersion) else { throw PatchError.notGPTK("invalid D3DMetal version") }
         let patchedBefore = fm.fileExists(atPath: src.sharedSupport.appendingPathComponent("gptkpatcher-receipt.json").path)
         if patchedBefore {
             log("This CrossOver was patched before; the stock toolkit kept back then stays as the backup.")
         } else if let stock = src.installedD3DMetalVersion, stock == installedVersion {
             log("Note: this CrossOver already ships D3DMetal \(stock); it will carry the same build plus the nvngx aliases.")
         }
+        onStep(.verifying)
+        try AppSigning.validateSource(src, token: token, log: log)
 
         // 2. Duplicate CrossOver (an APFS clone when possible, which is instant and shares storage),
         //    or work on the source app itself.
         onStep(.copying)
         try token.checkpoint()
-        var dst: URL
+        let dst: URL
         switch request.mode {
         case .copy:
             dst = request.destination
-            try prepareDestination(dst)
+            replacedCopy = try prepareDestination(dst)
             createdCopy = dst
             try copyBundle(from: src.url, to: dst)
         case .inPlace:
             dst = src.url
             log("Patching \(src.url.lastPathComponent) in place.")
         }
-        if request.mode == .copy {
-            // Verify the duplicate itself, before it is modified, so the app being patched is one macOS
-            // has approved. It may move itself into Applications during that; follow it.
-            onStep(.verifying)
-            let approved = try FirstLaunch.approve(try CrossOverBundle(url: dst), token: token, log: log)
-            if approved != dst {
-                dst = approved
-                createdCopy = approved
-            }
-        }
         let copy = try CrossOverBundle(url: dst)
         let gptkDir = try copy.gptkDirectory()
         let stockBackup = gptkDir.deletingLastPathComponent().appendingPathComponent("apple_gptk.stock")
-
-        // The app has been verified by macOS at this point (or was never a download). Clear the download
-        // record from the bundle and its files: while it remains, macOS runs the app from a hidden
-        // translocated copy, and CrossOver then offers to "move itself to Applications" every launch.
-        let unquarantined = Quarantine.strip(under: dst)
-        if unquarantined > 0 { log("Cleared the download record from \(unquarantined) item(s) in the app.") }
+        try FileSafety.requireContained(stockBackup, in: dst)
 
         // 3. Swap apple_gptk.
         onStep(.installing)
@@ -169,22 +169,22 @@ struct PatchJob {
         if fm.isDirectory(gptkDir.deletingLastPathComponent().appendingPathComponent("apple_gptk3")) {
             log("This build also bundles GPTK 3 (apple_gptk3). It is left alone; bottles set to D3DMetal 3 (CX_GRAPHICS_BACKEND_VERSION=3) keep using it, all others use the patched toolkit.")
         }
-        try Shell.check("/bin/chmod", ["-R", "u+w", gptkDir.path], token: token)
         var previousPatch: URL?
-        let written = Written()
         if fm.fileExists(atPath: stockBackup.path) {
             // Patched before: the real stock is already backed up and the current folder is an
             // earlier patch. Set it aside until the new one is verified.
             log("Found an earlier patch; keeping the original \(stockBackup.lastPathComponent)")
             let previous = gptkDir.deletingLastPathComponent().appendingPathComponent(".apple_gptk.previous")
-            if fm.fileExists(atPath: previous.path) { try fm.removeItem(at: previous) }
+            guard !FileSafety.exists(previous) else {
+                throw PatchError.io("An interrupted patch left recovery files at \(previous.path). Keep that folder and restore it as apple_gptk before retrying, or start from a fresh CrossOver download.")
+            }
             try fm.moveItem(at: gptkDir, to: previous)
             previousPatch = previous
-            rollback = { undo(written); restore(previous, to: gptkDir, what: "previous") }
+            rollback = { restore(previous, to: gptkDir, what: "previous") }
         } else {
             try fm.moveItem(at: gptkDir, to: stockBackup)
             log("Kept the stock GPTK as \(stockBackup.lastPathComponent)")
-            rollback = { undo(written); restore(stockBackup, to: gptkDir, what: "stock") }
+            rollback = { restore(stockBackup, to: gptkDir, what: "stock") }
         }
 
         try fm.createDirectory(at: gptkDir, withIntermediateDirectories: false)
@@ -193,7 +193,7 @@ struct PatchJob {
         try? fm.removeItem(at: gptkDir.appendingPathComponent("toolkit.json"))
         try? fm.removeItem(at: gptkDir.appendingPathComponent(ToolkitLibrary.documentsFolder))
         try Shell.check("/bin/chmod", ["-R", "u+w", gptkDir.path], token: token)
-        let stripped = Quarantine.strip(under: gptkDir)
+        let stripped = try Quarantine.strip(under: gptkDir, token: token)
         if stripped > 0 { log("Removed the quarantine flag from \(stripped) copied item(s)") }
 
         // 4. Make sure nothing CrossOver relies on went missing, then add the DLSS aliases.
@@ -209,51 +209,61 @@ struct PatchJob {
         try token.checkpoint()
         try verify(gptkDir: gptkDir, expectAliases: !aliases.isEmpty)
         let receipt = PatchReceipt(
-            tool: "GPTKPatcher " + ((Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"), date: Date(),
+            tool: "GPTKPatcher " + Self.toolVersion, date: Date(),
             sourceCrossOver: src.url.path, sourceCrossOverVersion: src.version,
             stockD3DMetalVersion: D3DMetalInfo.read(inLib: stockBackup).version ?? src.installedD3DMetalVersion,
             toolkitSource: toolkit.sourceName, toolkitPath: toolkit.lib.path, gptkD3DMetalVersion: installedVersion,
-            gptkDirectory: gptkDir.path, stockBackup: stockBackup.path, dlssAliases: aliases,
+            gptkDirectory: String(gptkDir.path.dropFirst(dst.path.count + 1)),
+            stockBackup: String(stockBackup.path.dropFirst(dst.path.count + 1)), dlssAliases: aliases,
             environment: Dictionary(uniqueKeysWithValues: request.graphics.assignments.compactMap { key, value in value.map { (key, $0) } }))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         let receiptURL = copy.sharedSupport.appendingPathComponent("gptkpatcher-receipt.json")
-        written.receipt = (receiptURL, try? Data(contentsOf: receiptURL))
-        try encoder.encode(receipt).write(to: receiptURL)
+        try FileSafety.requireContained(receiptURL, in: dst)
+        try backup.capture(receiptURL)
+        try encoder.encode(receipt).write(to: receiptURL, options: .atomic)
         try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: dst.path)
 
         // 6. Environment: app-wide in the copy's etc/CrossOver.conf, then per bottle on top.
         let settings = request.graphics
         if settings.storeInCopy {
             let conf = copy.globalConfig
+            try FileSafety.requireContained(conf, in: dst)
             if fm.fileExists(atPath: conf.path) {
-                written.configs.append((conf, try Data(contentsOf: conf)))
+                try backup.capture(conf)
+                try backup.capture(conf.appendingPathExtension("gptkpatcher.bak"))
                 let changes = try settings.apply(to: conf)
                 log("App-wide settings: \(settings.describe(changes)) in etc/CrossOver.conf")
             } else {
-                log("Warning: \(conf.path) not found; app-wide settings were skipped.")
+                throw PatchError.io("CrossOver.conf is missing. DLSS settings cannot be installed. Use a fresh CrossOver download.")
             }
         }
         for bottle in request.bottles {
-            written.configs.append((bottle.conf, try Data(contentsOf: bottle.conf)))
+            try token.checkpoint()
+            try backup.capture(bottle.conf)
+            try backup.capture(bottle.conf.appendingPathExtension("gptkpatcher.bak"))
             let changes = try settings.apply(to: bottle.conf)
             log("Bottle “\(bottle.name)”: \(settings.describe(changes)) in cxbottle.conf")
         }
 
+        onStep(.signing)
+        // Repatching's temporary backup is inside the bundle: remove it before sealing, but
+        // keep it in the transaction directory until success so signing can still roll back.
+        if let previousPatch {
+            let kept = backup.directory.appendingPathComponent("previous-toolkit")
+            try fm.moveItem(at: previousPatch, to: kept)
+            rollback = { restore(kept, to: gptkDir, what: "previous") }
+        }
+        try AppSigning.seal(copy, backup: backup, token: token, log: log)
+        try token.checkpoint()
         rollback = nil
-        if let previousPatch { try? fm.removeItem(at: previousPatch) }
 
         // 7. In-place patches get the toolkit version in their name, like duplicates do. CrossOver's
         //    helpers find it by bundle identifier, so the rename is safe; a taken name is left alone.
-        //    Bottle sessions this app started would be left pointing at the old path and hang every
-        //    later query, so they are ended first.
+        //    Preflight requires its bottle sessions to be stopped before files or paths change.
         var finalURL = dst
         if request.mode == .inPlace {
-            for session in BottleEnv.runningBottles(startedFrom: dst) {
-                log("Ending the running \(session.prefix.lastPathComponent) bottle session; it was started from this app's old path.")
-                try? BottleEnv.quit(session)
-            }
             let wanted = "\(src.name) (GPTK \(installedVersion)).app"
             let target = dst.deletingLastPathComponent().appendingPathComponent(wanted)
             if dst.lastPathComponent == wanted {
@@ -296,22 +306,15 @@ struct PatchJob {
     // MARK: - Rollback
 
     /// Puts the set-aside toolkit folder back in place of the half-installed one.
-    private func restore(_ kept: URL, to gptkDir: URL, what: String) {
+    private func restore(_ kept: URL, to gptkDir: URL, what: String) -> [String] {
         do {
             if fm.fileExists(atPath: gptkDir.path) { try fm.removeItem(at: gptkDir) }
             try fm.moveItem(at: kept, to: gptkDir)
             log("Restored the \(what) toolkit folder.")
+            return []
         } catch {
-            log("Couldn't restore the \(what) toolkit folder: \(error.localizedDescription). It is still at \(kept.path).")
+            return ["Couldn't restore the \(what) toolkit folder: \(error.localizedDescription). It is still at \(kept.path)."]
         }
-    }
-
-    /// Removes the receipt and puts config files back as they were, so nothing claims a patch that was undone.
-    private func undo(_ written: Written) {
-        if let (url, original) = written.receipt {
-            if let original { try? original.write(to: url) } else { try? fm.removeItem(at: url) }
-        }
-        for (url, original) in written.configs.reversed() { try? original.write(to: url) }
     }
 
     // MARK: - Steps
@@ -322,29 +325,30 @@ struct PatchJob {
         return parent == "/Applications" || parent == home + "/Applications"
     }
 
-    private func logMinimumOS(version: String, minimum: String?) {
-        guard let minimum else { return }
-        let parts = minimum.split(separator: ".").compactMap { Int($0) }
-        guard parts.count >= 1 else { return }
-        let required = OperatingSystemVersion(majorVersion: parts[0], minorVersion: parts.count > 1 ? parts[1] : 0,
-                                              patchVersion: parts.count > 2 ? parts[2] : 0)
-        let running = ProcessInfo.processInfo.operatingSystemVersion
-        if ProcessInfo.processInfo.isOperatingSystemAtLeast(required) {
-            log("GPTK \(version) requires macOS \(minimum); running \(running.majorVersion).\(running.minorVersion) — OK")
-        } else {
-            log("Warning: GPTK \(version) declares a minimum of macOS \(minimum) but this Mac runs \(running.majorVersion).\(running.minorVersion). Games may fail to start.")
+    static func validateDestination(_ destination: URL, source: URL) throws {
+        let dst = destination.resolvingSymlinksInPath().standardizedFileURL
+        let src = source.resolvingSymlinksInPath().standardizedFileURL
+        guard destination.pathExtension.lowercased() == "app", dst != src,
+              !FileSafety.contains(dst, in: src), !FileSafety.contains(src, in: dst) else {
+            throw PatchError.io("Choose a separate .app destination outside the original CrossOver. A duplicate cannot replace or contain its source.")
+        }
+        guard (try? destination.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else {
+            throw PatchError.io("The destination is a symbolic link. Choose a new app name.")
         }
     }
 
-    private func prepareDestination(_ dst: URL) throws {
+    private func prepareDestination(_ dst: URL) throws -> (original: URL, trashed: URL)? {
         let parent = dst.deletingLastPathComponent()
         try fm.createDirectory(at: parent, withIntermediateDirectories: true)
-        guard fm.fileExists(atPath: dst.path) else { return }
+        guard FileSafety.exists(dst) else { return nil }
         guard request.replaceExisting else { throw PatchError.destinationExists(dst.path) }
         // Refuse to replace anything that isn't a CrossOver bundle, so a typo can't wipe an unrelated app.
-        _ = try CrossOverBundle(url: dst)
+        try CrossOverBundle(url: dst).requireNotRunning()
         log("Moving the existing \(dst.lastPathComponent) to the Trash…")
-        try fm.trashItem(at: dst, resultingItemURL: nil)
+        var trashed: NSURL?
+        try fm.trashItem(at: dst, resultingItemURL: &trashed)
+        guard let trashed else { throw PatchError.io("The replaced app was moved to the Trash, but its recovery path could not be read.") }
+        return (dst, trashed as URL)
     }
 
     private func copyBundle(from src: URL, to dst: URL) throws {
@@ -424,33 +428,5 @@ struct PatchJob {
         }
         let installed = D3DMetalInfo.read(inLib: gptkDir).version ?? "unknown"
         log("Verified: D3DMetal \(installed) is in place with the DirectX 12 and DXGI shims.")
-    }
-}
-
-enum Quarantine {
-    private static let name = "com.apple.quarantine"
-
-    /// The raw quarantine attribute on an item, or nil if it has none.
-    static func marker(of url: URL) -> String? {
-        let size = getxattr(url.path, name, nil, 0, 0, XATTR_NOFOLLOW)
-        guard size > 0 else { return nil }
-        var buffer = [UInt8](repeating: 0, count: size)
-        let read = getxattr(url.path, name, &buffer, size, 0, XATTR_NOFOLLOW)
-        guard read > 0 else { return nil }
-        return String(decoding: buffer[0..<read], as: UTF8.self)
-    }
-
-    /// Removes com.apple.quarantine from `root` and every item under it (symlinks as themselves).
-    @discardableResult
-    static func strip(under root: URL) -> Int {
-        var urls = [root]
-        if let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil, options: []) {
-            for case let url as URL in enumerator { urls.append(url) }
-        }
-        var count = 0
-        for url in urls where removexattr(url.path, name, XATTR_NOFOLLOW) == 0 {
-            count += 1
-        }
-        return count
     }
 }
