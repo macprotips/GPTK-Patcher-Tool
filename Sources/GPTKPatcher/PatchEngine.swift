@@ -63,6 +63,8 @@ final class PatchEngine {
     }
     private var persistsOutputFolder = true
     private var token: CancellationToken?
+    private var importToken: CancellationToken?
+    var isCancelling = false
 
     init() {
         let saved = UserDefaults.standard.string(forKey: Self.folderKey).map { URL(fileURLWithPath: $0) }
@@ -80,7 +82,10 @@ final class PatchEngine {
     }
 
     var isRunning: Bool { if case .running = phase { return true } else { return false } }
-    var isReady: Bool { crossOver != nil && selectedToolkit != nil && importingImage == nil && !isRunning }
+    var isImporting: Bool { importToken != nil }
+    var isBusy: Bool { isRunning || isImporting }
+    var compatibilityIssue: String? { selectedToolkit?.compatibilityIssue }
+    var isReady: Bool { crossOver != nil && selectedToolkit != nil && importingImage == nil && !isBusy && compatibilityIssue == nil }
 
     /// The name the copy will get. Never replaces anything: if the name is taken, a counter is added.
     var outputName: String {
@@ -115,18 +120,23 @@ final class PatchEngine {
     /// Sends any dropped or chosen file to the right slot, whichever tile it landed on.
     @discardableResult
     func route(_ url: URL) -> Bool {
+        guard !isRunning, !isCancelling else { return false }
         switch url.pathExtension.lowercased() {
         case "app": setCrossOver(url); return true
-        case "dmg": importToolkit(from: url); return true
+        case "dmg":
+            guard !isImporting else { return false }
+            importToolkit(from: url); return true
         default: return false
         }
     }
 
     func setCrossOver(_ url: URL) {
+        guard !isRunning else { return }
         crossOverURL = url
         if case .cancelled = phase { phase = .idle }
         do {
             let bundle = try CrossOverBundle(url: url)
+            _ = try bundle.gptkDirectory()
             crossOver = bundle
             var lines = [bundle.displayVersion]
             if let stock = bundle.installedD3DMetalVersion { lines.append("D3DMetal \(stock)") }
@@ -139,6 +149,7 @@ final class PatchEngine {
     }
 
     func clearCrossOver() {
+        guard !isRunning else { return }
         crossOver = nil
         crossOverURL = nil
         crossOverStatus = .empty
@@ -161,25 +172,34 @@ final class PatchEngine {
     }
 
     func selectToolkit(_ toolkit: Toolkit) {
+        guard !isBusy else { return }
         selectedToolkit = toolkit
         toolkitStatus = .ok(toolkit.version)
     }
 
     /// Copies the image's payload into the library, then selects it.
     func importToolkit(from url: URL) {
+        guard !isBusy else { return }
+        let token = CancellationToken()
+        importToken = token
+        isCancelling = false
         importingImage = url
         toolkitStatus = .checking("Adding to the library…")
         if case .cancelled = phase { phase = .idle }
         Task.detached(priority: .userInitiated) {
-            let result: Result<Toolkit, Error> = Result { try ToolkitLibrary.importImage(url) { _ in } }
+            let result: Result<Toolkit, Error> = Result { try ToolkitLibrary.importImage(url, token: token) { _ in } }
             await MainActor.run {
-                guard self.importingImage == url else { return }
+                self.importToken = nil
+                self.isCancelling = false
                 switch result {
                 case .success(let toolkit):
                     self.importingImage = nil
                     self.refreshToolkits()
                     self.selectedToolkit = self.toolkits.first { $0.version == toolkit.version } ?? toolkit
                     self.toolkitStatus = .ok(toolkit.version)
+                case .failure(is CancellationError):
+                    self.importingImage = nil
+                    self.toolkitStatus = self.selectedToolkit.map { .ok($0.version) } ?? .empty
                 case .failure(let error):
                     self.toolkitStatus = .failed(Self.reason(for: error))
                 }
@@ -188,13 +208,20 @@ final class PatchEngine {
     }
 
     func removeToolkit(_ toolkit: Toolkit) {
-        try? ToolkitLibrary.remove(toolkit)
-        refreshToolkits()
-        toolkitStatus = toolkits.isEmpty ? .empty : .ok(selectedToolkit?.version ?? "")
+        guard !isBusy else { return }
+        do {
+            try ToolkitLibrary.remove(toolkit)
+            refreshToolkits()
+            toolkitStatus = toolkits.isEmpty ? .empty : .ok(selectedToolkit?.version ?? "")
+        } catch {
+            logLines = [error.localizedDescription]
+            phase = .failed(Failure(title: "Couldn't remove the toolkit", message: error.localizedDescription))
+        }
     }
 
     /// Clears a failed import so the row returns to its drop state (or the library, if any).
     func dismissToolkitError() {
+        guard !isBusy else { return }
         importingImage = nil
         toolkitStatus = toolkits.isEmpty ? .empty : .ok(selectedToolkit?.version ?? "")
     }
@@ -220,6 +247,7 @@ final class PatchEngine {
         let applicationsFolder = Self.defaultFolder
         let token = CancellationToken()
         self.token = token
+        isCancelling = false
         phase = .running(PatchStep.sequence(for: mode)[0])
         logLines = []
         let log: @Sendable (String) -> Void = { line in
@@ -239,11 +267,13 @@ final class PatchEngine {
             }
             await MainActor.run {
                 self.token = nil
+                self.isCancelling = false
                 switch outcome {
                 case .success(let url):
                     PatchedAppRegistry.remember(url)
                     self.refreshPatchedApps()
                     self.phase = .done(url)
+                    if request.mode == .inPlace { self.setCrossOver(url) }
                 case .failure(is CancellationError):
                     self.phase = .cancelled
                 case .failure(let error):
@@ -255,11 +285,17 @@ final class PatchEngine {
     }
 
     func cancel() {
+        guard isBusy else { return }
+        isCancelling = true
         token?.cancel()
+        importToken?.cancel()
     }
 
     func reset() {
+        guard !isBusy else { return }
         phase = .idle
+        refreshToolkits()
+        refreshPatchedApps()
     }
 
     // MARK: Human-readable errors

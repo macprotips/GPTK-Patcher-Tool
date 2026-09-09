@@ -18,7 +18,15 @@ final class CancellationToken: @unchecked Sendable {
     func cancel() {
         lock.withLock {
             cancelled = true
-            current?.terminate()
+            if let current { Self.stop(current) }
+        }
+    }
+
+    static func stop(_ process: Process) {
+        guard process.isRunning else { return }
+        process.terminate()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         }
     }
 
@@ -32,54 +40,77 @@ final class CancellationToken: @unchecked Sendable {
 }
 
 enum Shell {
-    /// Runs an executable with arguments, capturing stdout and stderr without deadlocking on full pipes.
+    /// Capture to private files so neither full pipes nor an inherited child-process pipe can
+    /// strand cancellation. All callers use argument arrays, never a shell-interpolated command.
     @discardableResult
     static func run(_ executable: String, _ arguments: [String], environment: [String: String]? = nil,
-                    token: CancellationToken? = nil) throws -> CommandResult {
+                    token: CancellationToken? = nil, timeout: TimeInterval = 900) throws -> CommandResult {
         try token?.checkpoint()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        process.standardInput = FileHandle.nullDevice
         if let environment {
             process.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 }
         }
-        let out = Pipe()
-        let err = Pipe()
+        let fm = FileManager.default
+        let directory = fm.temporaryDirectory.appendingPathComponent("GPTKPatcher-command-\(UUID().uuidString)")
+        try fm.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? fm.removeItem(at: directory) }
+        let stdout = directory.appendingPathComponent("stdout")
+        let stderr = directory.appendingPathComponent("stderr")
+        guard fm.createFile(atPath: stdout.path, contents: nil, attributes: [.posixPermissions: 0o600]),
+              fm.createFile(atPath: stderr.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw PatchError.io("Could not create command output files. Check free disk space.")
+        }
+        let out = try FileHandle(forWritingTo: stdout)
+        let err = try FileHandle(forWritingTo: stderr)
+        defer { try? out.close(); try? err.close() }
         process.standardOutput = out
         process.standardError = err
         try process.run()
         token?.track(process)
         defer { token?.track(nil) }
-        if token?.isCancelled == true { process.terminate() }   // cancelled between run and track
-
-        // stderr is drained on another thread so a chatty command can't fill one pipe and stall.
-        let errBox = DataBox()
-        let group = DispatchGroup()
-        group.enter()
-        DispatchQueue.global(qos: .userInitiated).async {
-            errBox.data = err.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
+        if token?.isCancelled == true { CancellationToken.stop(process) }
+        let timedOut = TimeoutState()
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + timeout)
+        timer.setEventHandler {
+            if process.isRunning {
+                timedOut.expire()
+                CancellationToken.stop(process)
+            }
         }
-        let outData = out.fileHandleForReading.readDataToEndOfFile()
-        group.wait()
+        timer.resume()
+        defer { timer.cancel() }
+
         process.waitUntilExit()
+        if timedOut.expired { throw PatchError.io("\(URL(fileURLWithPath: executable).lastPathComponent) took too long and was stopped. Try again after checking the disk and available space.") }
         return CommandResult(
             status: process.terminationStatus,
-            stdout: String(decoding: outData, as: UTF8.self),
-            stderr: String(decoding: errBox.data, as: UTF8.self)
+            stdout: String(decoding: try Data(contentsOf: stdout), as: UTF8.self),
+            stderr: String(decoding: try Data(contentsOf: stderr), as: UTF8.self)
         )
     }
 
     /// Like `run` but throws when the exit status is non-zero.
     @discardableResult
-    static func check(_ executable: String, _ arguments: [String], token: CancellationToken? = nil) throws -> CommandResult {
-        let result = try run(executable, arguments, token: token)
+    static func check(_ executable: String, _ arguments: [String], token: CancellationToken? = nil,
+                      timeout: TimeInterval = 900) throws -> CommandResult {
+        let result = try run(executable, arguments, token: token, timeout: timeout)
         try token?.checkpoint()
         guard result.status == 0 else {
             throw PatchError.command("\(executable) \(arguments.joined(separator: " "))", result)
         }
         return result
     }
+}
+
+private final class TimeoutState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var expired: Bool { lock.withLock { value } }
+    func expire() { lock.withLock { value = true } }
 }
 
 enum PatchError: LocalizedError {
@@ -111,6 +142,17 @@ extension FileManager {
     }
 }
 
-private final class DataBox: @unchecked Sendable {
-    var data = Data()
+/// CLI interrupts use the same rollback path as the GUI's Cancel button.
+final class SignalCancellation {
+    private var sources: [DispatchSourceSignal] = []
+    init(token: CancellationToken) {
+        for number in [SIGINT, SIGTERM] {
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+            source.setEventHandler { token.cancel() }
+            source.resume()
+            sources.append(source)
+        }
+    }
+    func stop() { for source in sources { source.cancel() }; sources = [] }
 }

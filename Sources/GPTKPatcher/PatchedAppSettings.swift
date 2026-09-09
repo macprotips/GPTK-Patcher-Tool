@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Options for one patched CrossOver, opened from the gear in the Patched list. Values are read
-/// from and written to one config file: the app's own CrossOver.conf ("All bottles") or a
+/// from and written to one config file: the app's own CrossOver.conf ("App defaults") or a
 /// bottle's cxbottle.conf, which overrides the app-wide value for that bottle.
 struct PatchedAppSettings: View {
     let app: PatchedApp
@@ -13,17 +13,10 @@ struct PatchedAppSettings: View {
         var bottle: BottleEnv.Bottle? { if case .bottle(let b) = self { return b } else { return nil } }
     }
 
-    private struct Values: Equatable {
-        var fpsEnabled = false
-        var fpsValue = 60
-        var hud = false
-        var metal4 = Metal4Mode.automatic
-    }
-
     @State private var scope: Scope = .allBottles
     @State private var bottles: [BottleEnv.Bottle] = []
-    @State private var values = Values()
-    @State private var saved = Values()
+    @State private var values = GraphicsOptions()
+    @State private var saved = GraphicsOptions()
     @State private var error: String?
     @State private var applied = false
     @State private var running: BottleEnv.RunningBottle?
@@ -36,7 +29,12 @@ struct PatchedAppSettings: View {
     /// launched with, so the bottle is quit first and the settings written after.
     @State private var promptQuitToApply = false
     @State private var applyAfterQuit = false
+    @State private var resetAfterQuit = false
     @State private var quitting = false
+    @State private var saving = false
+    @State private var scanID = UUID()
+
+    private var busy: Bool { checking || quitting || saving }
 
     private var isDirty: Bool {
         values.fpsEnabled != saved.fpsEnabled || values.hud != saved.hud || values.metal4 != saved.metal4
@@ -58,23 +56,26 @@ struct PatchedAppSettings: View {
                     Text("Apply to")
                     Spacer()
                     Picker("Apply to", selection: $scope) {
-                        Text("All bottles").tag(Scope.allBottles)
+                        Text("App defaults").tag(Scope.allBottles)
                         if !bottles.isEmpty { Divider() }
                         ForEach(bottles) { bottle in
                             Text(bottle.name).tag(Scope.bottle(bottle))
                         }
                     }
                     .labelsHidden()
-                    .fixedSize()
+                    .frame(maxWidth: 260)
+                    .disabled(busy)
                 }
                 Text(scope == .allBottles
-                     ? "Every bottle launched with this copy of CrossOver."
-                     : "Only this bottle, with any CrossOver. Overrides the setting for all bottles.")
+                     ? "Defaults for bottles launched with this copy. Per-bottle settings take priority."
+                     : "Only this bottle, with any CrossOver. Unset values inherit this app's defaults.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if scope == .allBottles, !overrides.isEmpty {
-                    Text("Currently overridden by " + overrides.joined(separator: "; ") + ". Apply replaces those so this applies everywhere.")
+                    Text("Overridden by " + overrides.prefix(3).joined(separator: "; ")
+                         + (overrides.count > 3 ? "; and \(overrides.count - 3) more" : "")
+                         + ". Choose a bottle to change or reset its overrides.")
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
@@ -94,7 +95,7 @@ struct PatchedAppSettings: View {
                             .multilineTextAlignment(.trailing)
                             .frame(width: 48)
                             .accessibilityLabel("Frame rate limit")
-                        Stepper("", value: $values.fpsValue, in: 10...480, step: 5).labelsHidden()
+                        Stepper("", value: $values.fpsValue, in: 1...1000).labelsHidden()
                         Text("fps").foregroundStyle(.secondary)
                     } else {
                         Text("Off").foregroundStyle(.secondary)
@@ -125,12 +126,13 @@ struct PatchedAppSettings: View {
                         .frame(width: 190)
                     }
                     .frame(height: 24)
-                    Text(Metal4Mode.defaultDescription)
+                    Text(scope.bottle == nil ? Metal4Mode.defaultDescription : "Default inherits this CrossOver's Metal 4 setting. On and Off override it for this bottle.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .disabled(busy)
 
             if let running {
                 runningNotice(running)
@@ -138,22 +140,33 @@ struct PatchedAppSettings: View {
             }
 
             // Footer
-            HStack(spacing: 10) {
-                if let error {
+            if let error {
+                ScrollView {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundStyle(.orange)
-                        .lineLimit(2)
-                } else if applied, !isDirty {
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 90)
+                .padding(.top, 16)
+            }
+            HStack(spacing: 10) {
+                if error == nil, applied, !isDirty {
                     Label("Applied", systemImage: "checkmark.circle.fill")
                         .font(.caption)
                         .foregroundStyle(.green)
                 }
                 Spacer()
-                Button("Apply", action: apply)
+                if scope.bottle != nil {
+                    Button("Use App Defaults") { apply(reset: true) }
+                        .disabled(busy)
+                }
+                Button("Apply") { apply() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
-                    .disabled(!isDirty || checking || quitting)
+                    .disabled(!isDirty || busy || (values.fpsEnabled && !(1...1000).contains(values.fpsValue)))
             }
             .padding(.top, 20)
         }
@@ -199,7 +212,7 @@ struct PatchedAppSettings: View {
             Spacer(minLength: 8)
             Button(quitting ? "Quitting…" : "Quit Bottle") { confirmQuit = true }
                 .controlSize(.small)
-                .disabled(quitting)
+                .disabled(busy)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -233,17 +246,20 @@ struct PatchedAppSettings: View {
         }
     }
 
-    private nonisolated static func scan(_ bottle: BottleEnv.Bottle?, all: [BottleEnv.Bottle]) -> BottleEnv.RunningBottle? {
+    private nonisolated static func scan(_ bottle: BottleEnv.Bottle?, app: URL) -> BottleEnv.RunningBottle? {
         if let bottle { return BottleEnv.runningBottle(for: bottle) }
-        return all.lazy.compactMap(BottleEnv.runningBottle(for:)).first
+        return BottleEnv.runningBottles(startedFrom: app).first
     }
 
     private func refreshRunning(then completion: @escaping @MainActor () -> Void = {}) {
         let bottle = scope.bottle
-        let all = bottles
+        let location = app.url
+        let id = UUID()
+        scanID = id
         checking = true
         Task {
-            let result = await Task.detached { Self.scan(bottle, all: all) }.value
+            let result = await Task.detached { Self.scan(bottle, app: location) }.value
+            guard scanID == id else { return }
             running = result
             checking = false
             completion()
@@ -254,13 +270,14 @@ struct PatchedAppSettings: View {
     private func quitBottle() {
         guard running != nil else { return }
         let bottle = scope.bottle
-        let all = bottles
+        let location = app.url
         quitting = true
         Task {
             let left = await Task.detached { () -> BottleEnv.RunningBottle? in
-                let targets = bottle.map { [BottleEnv.runningBottle(for: $0)].compactMap { $0 } } ?? BottleEnv.runningBottles()
+                let targets = bottle.map { [BottleEnv.runningBottle(for: $0)].compactMap { $0 } }
+                    ?? BottleEnv.runningBottles(startedFrom: location)
                 for target in targets { try? BottleEnv.quit(target) }
-                return Self.scan(bottle, all: all)
+                return Self.scan(bottle, app: location)
             }.value
             quitting = false
             running = left
@@ -270,7 +287,7 @@ struct PatchedAppSettings: View {
                 error = "Some programs in the bottle couldn't be quit."
             } else {
                 error = nil
-                if pending { write() }
+                if pending { write(reset: resetAfterQuit) }
             }
         }
     }
@@ -280,12 +297,7 @@ struct PatchedAppSettings: View {
     private var conf: URL { scope.bottle?.conf ?? app.globalConfig }
 
     private func load() {
-        var v = Values()
-        let cap = CXConfig.value(of: "D3DM_MAX_FPS", in: conf).flatMap(Int.init)
-        v.fpsEnabled = cap != nil
-        v.fpsValue = cap ?? 60
-        v.hud = CXConfig.value(of: "MTL_HUD_ENABLED", in: conf) == "1"
-        v.metal4 = Metal4Mode.from(stored: CXConfig.value(of: "D3DM_MTL4", in: conf))
+        let v = GraphicsOptions.load(from: conf, inheriting: scope.bottle == nil ? nil : app.globalConfig)
         values = v
         saved = v
         error = nil
@@ -294,34 +306,32 @@ struct PatchedAppSettings: View {
         refreshOverrides()
     }
 
-    private func apply() {
+    private func apply(reset: Bool = false) {
+        resetAfterQuit = reset
         refreshRunning {
-            if running != nil { promptQuitToApply = true } else { write() }
+            if running != nil { promptQuitToApply = true } else { write(reset: reset) }
         }
     }
 
-    private func write() {
-        do {
-            let cap = min(max(values.fpsValue, 1), 1000)
-            values.fpsValue = cap
-            try CXConfig.set("D3DM_MAX_FPS", to: values.fpsEnabled ? String(cap) : nil, in: conf)
-            try CXConfig.set("MTL_HUD_ENABLED", to: values.hud ? "1" : nil, in: conf)
-            try CXConfig.set("D3DM_MTL4", to: values.metal4.storedValue, in: conf)
-            if scope == .allBottles {
-                // "All bottles" has to mean all bottles: a bottle's own line would silently win otherwise.
-                for bottle in bottles {
-                    for key in ["D3DM_MAX_FPS", "MTL_HUD_ENABLED", "D3DM_MTL4"] where CXConfig.value(of: key, in: bottle.conf) != nil {
-                        try CXConfig.set(key, to: nil, in: bottle.conf)
-                    }
-                }
+    private func write(reset: Bool = false) {
+        guard !saving, !quitting else { return }
+        let changes = reset ? AppSettings.keys.map { ($0, nil as String?) } : values.changes(from: saved)
+        let location = app.url
+        let bottleConf = scope.bottle?.conf
+        saving = true
+        error = nil
+        Task {
+            let outcome = await Task.detached { () -> Result<Void, Error> in
+                Result { try AppSettings.apply(changes, to: CrossOverBundle(url: location), bottleConfig: bottleConf) }
+            }.value
+            saving = false
+            switch outcome {
+            case .success:
+                load()
+                applied = true
+            case .failure(let failure):
+                error = "Couldn't save: \(failure.localizedDescription)"
             }
-            saved = values
-            error = nil
-            applied = true
-            refreshRunning()
-            refreshOverrides()
-        } catch {
-            self.error = "Couldn't save: \(error.localizedDescription)"
         }
     }
 }
