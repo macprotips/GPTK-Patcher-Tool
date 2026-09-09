@@ -114,6 +114,7 @@ struct ToolkitTile: View {
 
     private func detail(for toolkit: Toolkit) -> String {
         var lines = ["D3DMetal \(D3DMetalInfo.read(inLib: toolkit.lib).version ?? toolkit.version)"]
+        if let minimum = toolkit.minimumOS { lines.append("Requires macOS \(minimum)+") }
         if toolkit.importedAt > .distantPast { lines.append("Added \(toolkit.importedAt.formatted(Self.dateFormat))") }
         return lines.joined(separator: "\n")
     }

@@ -1,18 +1,10 @@
 #!/bin/bash
 # Builds a universal release binary and assembles a runnable app bundle in build/.
-# Usage: scripts/build-app.sh            (then open "build/CrossOver GPTK Patcher.app")
+# Usage: scripts/build-app.sh            (then open "build/GPTK Patcher Tool.app")
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# The SwiftUI macros need a full Xcode toolchain. If xcode-select points at the bare
-# Command Line Tools, borrow the newest Xcode in /Applications for this build only.
-if [[ "$(xcode-select -p)" == *CommandLineTools* ]]; then
-    XCODE="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -n 1 || true)"
-    if [[ -n "$XCODE" ]]; then
-        export DEVELOPER_DIR="$XCODE/Contents/Developer"
-        echo "Using toolchain from $XCODE"
-    fi
-fi
+source scripts/toolchain.sh
 
 ARCHS=(--arch arm64 --arch x86_64)
 LOG="$(mktemp)"

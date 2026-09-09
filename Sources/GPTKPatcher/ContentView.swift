@@ -2,10 +2,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @Bindable private var engine = PatchEngine.shared
+    @Bindable var engine = PatchEngine.shared
+    var loadsData = true
     @State private var showLog = false
     @State private var showWhatChanges = false
     @State private var showSupportNotice = false
+    @AppStorage("acknowledgedSupportNotice") private var acknowledgedSupportNotice = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let width: CGFloat = 520
@@ -37,8 +39,9 @@ struct ContentView: View {
         .background(WindowConfigurator())
         .background(PasteCatcher { engine.pasteFromPasteboard() })
         .sheet(isPresented: $showLog) { LogSheet(lines: engine.logLines) }
-        .sheet(isPresented: $showSupportNotice) { SupportNoticeSheet() }
+        .sheet(isPresented: $showSupportNotice) { SupportNoticeSheet { acknowledgedSupportNotice = true } }
         .onAppear {
+            guard loadsData else { return }
             NSApp.activate(ignoringOtherApps: true)
             engine.refreshToolkits()
             engine.refreshPatchedApps()
@@ -46,9 +49,10 @@ struct ContentView: View {
         }
 
         .task {
+            guard loadsData else { return }
             // Presented after the window is on screen; a sheet requested earlier can be dropped.
             try? await Task.sleep(for: .milliseconds(250))
-            if ProcessInfo.processInfo.environment["GPTKPATCHER_SKIP_NOTICE"] != "1" { showSupportNotice = true }
+            if !acknowledgedSupportNotice { showSupportNotice = true }
         }
     }
 
@@ -76,6 +80,7 @@ struct ContentView: View {
         .controlSize(.regular)
         .labelsHidden()
         .frame(width: 280)
+        .disabled(engine.isBusy)
         // No .help here: a segmented picker shows one tooltip for the whole control, which would
         // describe the wrong segment half the time. The subtitle above states the current mode.
     }
@@ -90,6 +95,21 @@ struct ContentView: View {
                          url: engine.crossOverURL, status: engine.crossOverStatus,
                          onPick: { engine.route($0) }, onClear: engine.clearCrossOver)
                 ToolkitTile(engine: engine)
+            }
+
+            if engine.isImporting {
+                HStack {
+                    Text(engine.isCancelling ? "Cancelling import…" : "Importing toolkit…")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Cancel Import", action: engine.cancel).disabled(engine.isCancelling)
+                }
+                .padding(.top, 10)
+            } else if let issue = engine.compatibilityIssue {
+                Label(issue, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 10)
             }
 
             if engine.mode == .copy {
@@ -114,18 +134,21 @@ struct ContentView: View {
     private var outputSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             SectionLabel(showsPlannedOutput ? "Output" : "Patched")
-            VStack(spacing: 0) {
+            ScrollView {
+              VStack(spacing: 0) {
                 if showsPlannedOutput {
                     PlannedOutputRow(name: engine.outputName, sourceIcon: engine.crossOverURL)
                 }
                 ForEach(Array(engine.patchedApps.enumerated()), id: \.element.id) { index, app in
                     if index > 0 || showsPlannedOutput { Divider().padding(.leading, 14) }
-                    PatchedAppRow(app: app, autoOpenSettings: index == 0 && ProcessInfo.processInfo.environment["GPTKPATCHER_OPEN_SETTINGS"] == "1", onForget: {
+                    PatchedAppRow(app: app, onForget: {
                         PatchedAppRegistry.forget(app.url)
                         engine.refreshPatchedApps()
                     })
                 }
+              }
             }
+            .frame(height: CGFloat(min(engine.patchedApps.count + (showsPlannedOutput ? 1 : 0), 4)) * 54)
             .modifier(InputTileChrome(targeted: false, isEmpty: false, isError: false, cornerRadius: 10))
         }
     }
@@ -163,11 +186,12 @@ struct ContentView: View {
         HStack(spacing: 12) {
             whatChangesLink
             if case .cancelled = engine.phase {
-                Text("Patch cancelled. Nothing was changed.")
+                Text("Patch cancelled.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            if !engine.logLines.isEmpty { Button("Details…") { showLog = true } }
             Button("Patch CrossOver", action: engine.patch)
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
@@ -195,12 +219,10 @@ struct ContentView: View {
     private func progress(_ current: PatchStep) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Spacer()
-            Text("Patching CrossOver…")
+            Text(engine.isCancelling ? "Cancelling and restoring files…" : "Patching CrossOver…")
                 .font(.headline)
                 .padding(.bottom, 4)
-            Text(current == .verifying
-                 ? "If macOS asks whether to open CrossOver, click Open. CrossOver will open; answer any prompt it shows, and it will be quit for you after a few seconds."
-                 : " ")
+            Text(current == .signing ? "Preparing the modified app for local use and checking its signature." : " ")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -235,8 +257,10 @@ struct ContentView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
+                Button("Details…") { showLog = true }
                 Button("Cancel", action: engine.cancel)
                     .keyboardShortcut(.cancelAction)
+                    .disabled(engine.isCancelling)
             }
         }
         .frame(height: 300)
@@ -255,7 +279,7 @@ struct ContentView: View {
                     .font(.headline)
             }
             .padding(.bottom, 14)
-            Text(engine.mode == .copy ? "Patched copy created at" : "Patched and renamed to")
+            Text(engine.mode == .copy ? "Patched copy created at" : "Patched app saved at")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Text(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
@@ -272,6 +296,7 @@ struct ContentView: View {
                 .padding(.top, 12)
             Spacer()
             HStack {
+                Button("Details…") { showLog = true }
                 Spacer()
                 Button("Done", action: engine.reset)
                     .keyboardShortcut(.cancelAction)
@@ -296,12 +321,15 @@ struct ContentView: View {
                     .font(.headline)
             }
             .padding(.bottom, 12)
-            Text(failure.message)
-                .font(.subheadline)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(engine.mode == .copy
-                 ? "Nothing was left half-patched: any unfinished copy was removed."
-                 : "The app was put back the way it was.")
+            ScrollView {
+                Text(failure.message)
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 150)
+            Text("Details includes the patch log and any recovery steps.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 10)
@@ -346,7 +374,7 @@ private struct WhatChangesPopover: View {
             }
             bullet("Replaces the app's built-in D3DMetal with the version from the toolkit. The original is kept next to it as apple_gptk.stock, so the change can be undone.")
             bullet("Adds the nvngx.dll that games with DLSS look for, and turns DLSS to MetalFX on for every bottle the app launches.")
-            bullet("If the app being patched has never been opened, opens it for real first so macOS verifies it, waits for it to settle, and quits it. Without this a patched download is reported as damaged. The download record is then cleared so macOS runs the app from where it is.")
+            bullet("Checks the original app's signature, then signs and verifies the modified app for local use. Its embedded libraries retain their signatures. The local copy's download metadata is cleared so macOS can open it from this location.")
             bullet("Leaves a receipt inside the app. That is how it appears in the Patched list, where the gear sets a frame rate cap, the Metal Performance HUD, and Metal 4.")
             bullet("Each toolkit you add is stored in ~/Library/Application Support/GPTKPatcher so you can switch between versions later.")
             Text("A patched CrossOver is not supported by CodeWeavers.")
@@ -417,6 +445,7 @@ private struct WindowConfigurator: NSViewRepresentable {
 enum DebugHooks {
     @MainActor
     static func apply(to engine: PatchEngine) {
+        #if DEBUG
         let env = ProcessInfo.processInfo.environment
         if let appearance = env["GPTKPATCHER_APPEARANCE"] {
             NSApp.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
@@ -434,11 +463,13 @@ enum DebugHooks {
                 }
             }
         }
+        #endif
     }
 }
 
-/// Shown on every launch. It can only be dismissed with Continue or Quit.
+/// Acknowledged once; the same support information remains available in What changes.
 private struct SupportNoticeSheet: View {
+    let onContinue: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -458,7 +489,7 @@ private struct SupportNoticeSheet: View {
                 HStack {
                     Spacer()
                     Button("Quit") { NSApp.terminate(nil) }
-                    Button("Continue") { dismiss() }
+                    Button("Continue") { onContinue(); dismiss() }
                         .keyboardShortcut(.defaultAction)
                         .buttonStyle(.borderedProminent)
                 }
@@ -478,9 +509,11 @@ private struct SupportNoticeSheet: View {
 
 private struct PatchedAppRow: View {
     let app: PatchedApp
-    var autoOpenSettings = false
     let onForget: () -> Void
     @State private var showSettings = false
+    @State private var repairing = false
+    @State private var repairResult = ""
+    @State private var showRepairResult = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -508,19 +541,38 @@ private struct PatchedAppRow: View {
             .controlSize(.small)
             .help("Options: frame rate cap and Metal HUD")
             .accessibilityLabel("Options for \(app.name)")
+            .disabled(repairing)
             .popover(isPresented: $showSettings, arrowEdge: .bottom) { PatchedAppSettings(app: app) }
         }
         .padding(.leading, 12)
         .padding(.trailing, 8)
         .padding(.vertical, 8)
-        .task {
-            if autoOpenSettings { try? await Task.sleep(for: .milliseconds(600)); showSettings = true }
-        }
         .contextMenu {
             Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([app.url]) }
             Button("Options…") { showSettings = true }
+            Button(repairing ? "Repairing Launch…" : "Repair Launch", action: repairLaunch).disabled(repairing)
             Divider()
             Button("Remove from List") { onForget() }
+        }
+        .alert("Launch repair", isPresented: $showRepairResult) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(repairResult) }
+    }
+
+    private func repairLaunch() {
+        guard !repairing else { return }
+        repairing = true
+        let location = app.url
+        Task {
+            let result = await Task.detached { () -> Result<Void, Error> in
+                Result { try AppSigning.repair(CrossOverBundle(url: location), log: { _ in }) }
+            }.value
+            repairing = false
+            switch result {
+            case .success: repairResult = "The patched app's local signature has been repaired and verified. Open it from this location."
+            case .failure(let error): repairResult = error.localizedDescription
+            }
+            showRepairResult = true
         }
     }
 }
