@@ -55,12 +55,14 @@ notarization, with credentials configured as described at the top of that script
 
 ## Using it
 
-1. Drop `CrossOver.app` and the toolkit `.dmg` onto the two tiles. Either tile takes either file.
+1. **Launch the original CrossOver at least once before patching GPTK.** Complete its initial
+   setup, then quit CrossOver and any running games or bottles.
+2. Drop `CrossOver.app` and the toolkit `.dmg` onto the two tiles. Either tile takes either file.
    Files can also be dropped on the app icon, pasted with ⌘V, or picked with a file chooser. The
    full `Game_Porting_Toolkit_x.dmg` works directly; the evaluation-environment image inside it is
    found automatically.
-2. Choose **Duplicate CrossOver** or **Patch Existing**.
-3. Click **Patch CrossOver**.
+3. Choose **Duplicate CrossOver** or **Patch Existing**.
+4. Click **Patch CrossOver**.
 
 Imported toolkits are kept in `~/Library/Application Support/GPTKPatcher/Toolkits/<version>/` and
 picked from the menu on the toolkit tile.
