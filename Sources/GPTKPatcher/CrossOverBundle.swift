@@ -76,6 +76,11 @@ struct CrossOverBundle: Sendable {
         }
     }
 
+    /// Used when selecting a source and again immediately before patching. Never launches it.
+    func requireFirstLaunchApproval() throws {
+        if try Quarantine.hasPendingApproval(at: url) { throw PatchError.firstLaunchRequired }
+    }
+
     /// "CrossOver 26.3" or, for preview builds whose short version is a date, "CrossOver Preview 27.0.0.40921".
     var displayVersion: String {
         isPreview ? "\(name) \(build)" : "\(name) \(version)"

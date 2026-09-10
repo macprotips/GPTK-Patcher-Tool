@@ -114,6 +114,7 @@ private final class TimeoutState: @unchecked Sendable {
 }
 
 enum PatchError: LocalizedError {
+    case firstLaunchRequired
     case notCrossOver(String)
     case unsupportedLayout(String)
     case notGPTK(String)
@@ -123,6 +124,8 @@ enum PatchError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .firstLaunchRequired:
+            return "Launch CrossOver once and finish its setup, then quit CrossOver and its games before patching."
         case .notCrossOver(let why): return "That isn't a CrossOver app: \(why)"
         case .unsupportedLayout(let why): return "Unsupported CrossOver layout: \(why)"
         case .notGPTK(let why): return "That doesn't look like a Game Porting Toolkit disk image: \(why)"

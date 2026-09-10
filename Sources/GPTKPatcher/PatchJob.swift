@@ -115,6 +115,7 @@ struct PatchJob {
     private func perform(createdCopy: inout URL?, replacedCopy: inout (original: URL, trashed: URL)?,
                          rollback: inout (() -> [String])?, backup: FileBackup) throws -> URL {
         let src = try CrossOverBundle(url: request.crossOver.url)
+        try src.requireFirstLaunchApproval()
         log("GPTK Patcher \(Self.toolVersion) · \(ProcessInfo.processInfo.operatingSystemVersionString) · mode: \(request.mode.rawValue)")
         log("\(src.displayVersion) (build \(src.build)) at \(src.url.path)")
         if request.mode == .copy { try Self.validateDestination(request.destination, source: src.url) }
