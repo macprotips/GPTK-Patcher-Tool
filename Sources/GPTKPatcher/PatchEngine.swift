@@ -31,6 +31,7 @@ final class PatchEngine {
     var crossOver: CrossOverBundle?
     var crossOverURL: URL?
     var crossOverStatus: DropStatus = .empty
+    var crossOverInstructions: String?
 
     var toolkits: [Toolkit] = []
     var selectedToolkit: Toolkit?
@@ -122,7 +123,10 @@ final class PatchEngine {
     func route(_ url: URL) -> Bool {
         guard !isRunning, !isCancelling else { return false }
         switch url.pathExtension.lowercased() {
-        case "app": setCrossOver(url); return true
+        case "app":
+            phase = .idle
+            setCrossOver(url)
+            return true
         case "dmg":
             guard !isImporting else { return false }
             importToolkit(from: url); return true
@@ -133,10 +137,12 @@ final class PatchEngine {
     func setCrossOver(_ url: URL) {
         guard !isRunning else { return }
         crossOverURL = url
+        crossOverInstructions = nil
         if case .cancelled = phase { phase = .idle }
         do {
             let bundle = try CrossOverBundle(url: url)
             _ = try bundle.gptkDirectory()
+            try bundle.requireFirstLaunchApproval()
             crossOver = bundle
             var lines = [bundle.displayVersion]
             if let stock = bundle.installedD3DMetalVersion { lines.append("D3DMetal \(stock)") }
@@ -145,6 +151,9 @@ final class PatchEngine {
         } catch {
             crossOver = nil
             crossOverStatus = .failed(Self.reason(for: error))
+            if case PatchError.firstLaunchRequired = error {
+                crossOverInstructions = error.localizedDescription + " Drag the app in again or click the CrossOver tile to add it."
+            }
         }
     }
 
@@ -153,6 +162,7 @@ final class PatchEngine {
         crossOver = nil
         crossOverURL = nil
         crossOverStatus = .empty
+        crossOverInstructions = nil
     }
 
     func refreshPatchedApps() {
@@ -303,6 +313,8 @@ final class PatchEngine {
     /// One-line reason shown under an input that was rejected.
     static func reason(for error: Error) -> String {
         switch error {
+        case PatchError.firstLaunchRequired:
+            return "Open CrossOver once first."
         case PatchError.notCrossOver:
             return "This doesn't appear to be a supported CrossOver installation."
         case PatchError.unsupportedLayout:

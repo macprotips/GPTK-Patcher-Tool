@@ -135,6 +135,7 @@ enum HeadlessRunner {
             let signals = SignalCancellation(token: token)
             defer { signals.stop() }
             let crossOver = try CrossOverBundle(url: URL(fileURLWithPath: positional[0]))
+            try crossOver.requireFirstLaunchApproval()
             if !inPlace { try PatchJob.validateDestination(URL(fileURLWithPath: positional[2]), source: crossOver.url) }
             if inPlace {
                 let name = crossOver.url.lastPathComponent

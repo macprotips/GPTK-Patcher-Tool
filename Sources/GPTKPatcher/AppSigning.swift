@@ -66,6 +66,24 @@ enum AppSigning {
 enum Quarantine {
     private static let name = "com.apple.quarantine"
 
+    /// The download's approval marker is a first-open hint, not a complete launch history.
+    /// ponytail: copies can lose or inherit this metadata; only block a recorded pending approval.
+    static func hasPendingApproval(at url: URL) throws -> Bool {
+        let size = getxattr(url.path, name, nil, 0, 0, XATTR_NOFOLLOW)
+        if size < 0 {
+            if errno == ENOATTR || errno == ENOTSUP { return false }
+            throw PatchError.io("Could not check CrossOver's first-launch approval: \(String(cString: strerror(errno))).")
+        }
+        var data = Data(count: size)
+        let read = data.withUnsafeMutableBytes { getxattr(url.path, name, $0.baseAddress, size, 0, XATTR_NOFOLLOW) }
+        guard read >= 0 else { throw PatchError.io("Could not read CrossOver's first-launch approval. Add the app again to retry.") }
+        guard let marker = String(data: data.prefix(read), encoding: .utf8),
+              let field = marker.split(separator: ";", omittingEmptySubsequences: false).first,
+              let flags = UInt32(field, radix: 16) else { return false }
+        // QTN_FLAG_USER_APPROVED, also declared in Apple's WebKit QuarantineSPI.h.
+        return flags & 0x0040 == 0
+    }
+
     @discardableResult
     static func strip(under root: URL, backup: FileBackup? = nil, token: CancellationToken? = nil) throws -> Int {
         var count = 0
