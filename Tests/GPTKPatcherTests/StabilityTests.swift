@@ -77,7 +77,7 @@ final class StabilityTests: XCTestCase {
     func testDuplicateProducesSignedAppAndLeavesOriginalIntact() throws {
         let (app, kit) = try fixture()
         let original = try Data(contentsOf: app.globalConfig)
-        try quarantine(app.url)
+        try quarantine(app.url, value: "01e3;1234;Test;")
         let result = try PatchJob(request: request(app, kit), log: { _ in }).run()
         try assertSigned(result)
         try assertSigned(app.url)
@@ -96,6 +96,65 @@ final class StabilityTests: XCTestCase {
         let relative = try XCTUnwrap(json["gptkDirectory"] as? String)
         XCTAssertTrue(relative.hasPrefix("Contents/"))
         XCTAssertTrue(fm.fileExists(atPath: result.appendingPathComponent(relative).path))
+    }
+
+    func testFirstLaunchCheckUsesApprovalRatherThanMissingLaunchHistory() throws {
+        let (app, _) = try fixture()
+        // Missing or unreadable history does not prove a local/older copy was never opened.
+        XCTAssertNoThrow(try app.requireFirstLaunchApproval())
+        try quarantine(app.url, value: "0083;1234;Safari;")
+        XCTAssertThrowsError(try app.requireFirstLaunchApproval()) { error in
+            guard case PatchError.firstLaunchRequired = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+        try quarantine(app.url, value: "01e3;1234;Safari;")
+        XCTAssertNoThrow(try app.requireFirstLaunchApproval())
+        try quarantine(app.url, value: "invalid-record")
+        XCTAssertNoThrow(try app.requireFirstLaunchApproval())
+    }
+
+    @MainActor
+    func testReaddingCrossOverAfterFirstLaunchClearsTheRejection() throws {
+        let (app, kit) = try fixture()
+        let engine = PatchEngine()
+        engine.selectedToolkit = kit
+        engine.setCrossOver(app.url)
+        XCTAssertTrue(engine.isReady)
+
+        try quarantine(app.url, value: "0083;1234;Safari;")
+        engine.phase = .done(app.url)
+        XCTAssertTrue(engine.route(app.url))
+        XCTAssertEqual(engine.phase, .idle)
+        XCTAssertNil(engine.crossOver)
+        XCTAssertFalse(engine.isReady)
+        XCTAssertEqual(engine.crossOverStatus, .failed("Open CrossOver once first."))
+        XCTAssertTrue(try XCTUnwrap(engine.crossOverInstructions).contains("Drag the app in again"))
+
+        // Simulate macOS recording approval, then re-add the same file through the shared route.
+        try quarantine(app.url, value: "01e3;1234;Safari;")
+        XCTAssertTrue(engine.route(app.url))
+        XCTAssertTrue(engine.isReady)
+        XCTAssertNil(engine.crossOverInstructions)
+
+        try quarantine(app.url, value: "0083;1234;Safari;")
+        engine.setCrossOver(app.url)
+        engine.clearCrossOver()
+        XCTAssertNil(engine.crossOverInstructions)
+        XCTAssertEqual(engine.crossOverStatus, .empty)
+    }
+
+    func testPatchRechecksFirstLaunchBeforeCreatingOrChangingFiles() throws {
+        let (app, kit) = try fixture()
+        let job = request(app, kit)
+        let before = try Data(contentsOf: app.globalConfig)
+        // Approval changes after selection must still be caught by the shared patch job.
+        try quarantine(app.url, value: "0083;1234;Safari;")
+        XCTAssertThrowsError(try PatchJob(request: job, log: { _ in }).run()) { error in
+            guard case PatchError.firstLaunchRequired = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+        XCTAssertFalse(fm.fileExists(atPath: job.destination.path))
+        XCTAssertEqual(try Data(contentsOf: app.globalConfig), before)
+        XCTAssertFalse(fm.fileExists(atPath: try app.gptkDirectory().appendingPathExtension("stock").path))
+        try assertSigned(app.url)
     }
 
     func testRepatchPreservesStockAndRelocatableReceipt() throws {
@@ -344,9 +403,13 @@ final class StabilityTests: XCTestCase {
             PatchedApp(url: root.appendingPathComponent("CrossOver Patched \($0).app"), name: "CrossOver", gptkVersion: "4.0b2", patchedAt: nil)
         }
         let failure = Failure(title: "Couldn't patch CrossOver", message: "Could not remove download metadata from a file in CrossOver. Check that you own the app and can write to it. Recovery files are available in the location shown in Details.")
-        let states: [(String, Phase)] = [("ready", .idle), ("signing", .running(.signing)), ("error", .failed(failure)), ("success", .done(app.url))]
+        let states: [(String, Phase)] = [("ready", .idle), ("signing", .running(.signing)), ("error", .failed(failure)), ("success", .done(app.url)), ("first-launch", .idle)]
         for (name, phase) in states {
             engine.phase = phase
+            if name == "first-launch" {
+                try quarantine(app.url, value: "0083;1234;Safari;")
+                engine.setCrossOver(app.url)
+            }
             for scheme in [ColorScheme.light, .dark] {
                 let view = NSHostingView(rootView: ContentView(engine: engine, loadsData: false).environment(\.colorScheme, scheme))
                 view.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)

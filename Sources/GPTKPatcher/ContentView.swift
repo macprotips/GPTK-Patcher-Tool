@@ -97,6 +97,17 @@ struct ContentView: View {
                 ToolkitTile(engine: engine)
             }
 
+            if let instructions = engine.crossOverInstructions {
+                Label {
+                    Text(instructions)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                }
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 10)
+            }
+
             if engine.isImporting {
                 HStack {
                     Text(engine.isCancelling ? "Cancelling import…" : "Importing toolkit…")

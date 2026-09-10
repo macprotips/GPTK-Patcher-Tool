@@ -64,6 +64,12 @@ notarization, with credentials configured as described at the top of that script
 3. Choose **Duplicate CrossOver** or **Patch Existing**.
 4. Click **Patch CrossOver**.
 
+The patcher checks macOS's first-launch approval marker when you drop, paste, or choose CrossOver.
+If the download is still awaiting approval, it refuses the selection and asks you to launch it,
+finish setup, quit, and add it again. The check also runs before GUI or CLI patching starts.
+It does not open or quit CrossOver for you. This is a check of the download's approval record;
+macOS does not provide a complete launch history for every copied or unquarantined app.
+
 Imported toolkits are kept in `~/Library/Application Support/GPTKPatcher/Toolkits/<version>/` and
 picked from the menu on the toolkit tile.
 
