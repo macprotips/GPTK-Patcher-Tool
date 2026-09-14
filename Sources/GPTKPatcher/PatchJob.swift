@@ -8,6 +8,8 @@ enum PatchMode: String, Sendable, CaseIterable {
 struct PatchRequest: Sendable {
     let crossOver: CrossOverBundle
     let toolkit: Toolkit
+    /// Optional: also replace the CrossOver's bundled DXMT with this build.
+    var dxmt: DXMTBuild?
     let mode: PatchMode
     /// Where the copy goes (`.copy` mode). For `.inPlace` this is the source app itself.
     let destination: URL
@@ -30,6 +32,8 @@ struct PatchReceipt: Codable {
     let gptkDirectory: String
     let stockBackup: String
     let dlssAliases: [String]
+    var dxmtVersion: String?
+    var dxmtStock: String?
     let environment: [String: String]
 }
 
@@ -205,7 +209,13 @@ struct PatchJob {
             log("Warning: no \(aliasPrefix)* files were found, so no nvngx aliases were created.")
         }
 
-        // 5. Verify and record what happened.
+        // 5. Optionally replace DXMT, the other translation layer CrossOver bundles.
+        var dxmtStock: URL?
+        if let build = request.dxmt {
+            dxmtStock = try installDXMT(build, in: copy, within: dst, rollback: &rollback)
+        }
+
+        // 6. Verify and record what happened.
         onStep(.finalizing)
         try token.checkpoint()
         try verify(gptkDir: gptkDir, expectAliases: !aliases.isEmpty)
@@ -216,6 +226,7 @@ struct PatchJob {
             toolkitSource: toolkit.sourceName, toolkitPath: toolkit.lib.path, gptkD3DMetalVersion: installedVersion,
             gptkDirectory: String(gptkDir.path.dropFirst(dst.path.count + 1)),
             stockBackup: String(stockBackup.path.dropFirst(dst.path.count + 1)), dlssAliases: aliases,
+            dxmtVersion: request.dxmt?.version, dxmtStock: dxmtStock.map { String($0.path.dropFirst(dst.path.count + 1)) },
             environment: Dictionary(uniqueKeysWithValues: request.graphics.assignments.compactMap { key, value in value.map { (key, $0) } }))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -302,6 +313,65 @@ struct PatchJob {
 
         log("Done. \(finalURL.lastPathComponent) now carries D3DMetal \(installedVersion).")
         return finalURL
+    }
+
+    /// Replaces `lib/dxmt` with a build from the library, keeping the first stock copy as
+    /// `dxmt.stock`. Anything the release does not ship is carried over from the stock folder, so a
+    /// CrossOver that bundles ARM64 DXMT keeps it. Returns the backup path.
+    private func installDXMT(_ build: DXMTBuild, in copy: CrossOverBundle, within bundle: URL,
+                             rollback: inout (() -> [String])?) throws -> URL? {
+        try token.checkpoint()
+        guard DXMTLibrary.isValid(build.path) else {
+            throw PatchError.io("The library copy of DXMT \(build.version) is incomplete. Remove it from the DXMT menu and import the archive again.")
+        }
+        let dir = copy.sharedSupport.appendingPathComponent("lib/dxmt")
+        guard fm.isDirectory(dir) else {
+            log("Warning: this CrossOver has no lib/dxmt folder, so DXMT was skipped.")
+            return nil
+        }
+        let stock = dir.deletingLastPathComponent().appendingPathComponent("dxmt.stock")
+        try FileSafety.requireContained(stock, in: bundle)
+
+        try Shell.check("/bin/chmod", ["-R", "u+w", dir.path], token: token)
+        let previousRollback = rollback
+        var previousPatch: URL?
+        if FileSafety.exists(stock) {
+            // Patched before: the real stock is already kept, so this folder is an earlier build.
+            let previous = dir.deletingLastPathComponent().appendingPathComponent(".dxmt.previous")
+            guard !FileSafety.exists(previous) else {
+                throw PatchError.io("An interrupted patch left recovery files at \(previous.path). Keep that folder and restore it as dxmt before retrying.")
+            }
+            try fm.moveItem(at: dir, to: previous)
+            previousPatch = previous
+            rollback = { self.restore(previous, to: dir, what: "previous DXMT") + (previousRollback?() ?? []) }
+        } else {
+            try fm.moveItem(at: dir, to: stock)
+            log("Kept the stock DXMT as \(stock.lastPathComponent)")
+            rollback = { self.restore(stock, to: dir, what: "stock DXMT") + (previousRollback?() ?? []) }
+        }
+
+        try fm.createDirectory(at: dir, withIntermediateDirectories: false)
+        log("Copying DXMT \(build.version) files from the library…")
+        try Shell.check("/bin/cp", ["-Rp", build.path.path + "/.", dir.path], token: token)
+        try? fm.removeItem(at: dir.appendingPathComponent(DXMTLibrary.manifestName))
+        try Shell.check("/bin/chmod", ["-R", "u+w", dir.path], token: token)
+        try Quarantine.strip(under: dir, token: token)
+
+        // Upstream releases ship x86_64 and i386 only; CrossOver Preview also bundles aarch64
+        // builds for its native bottles. Keep whatever this release leaves out.
+        for name in ((try? fm.contentsOfDirectory(atPath: stock.path)) ?? []).sorted() where !name.hasPrefix(".") {
+            let target = dir.appendingPathComponent(name)
+            guard !FileSafety.exists(target) else { continue }
+            try fm.copyItem(at: stock.appendingPathComponent(name), to: target)
+            log("Kept the stock \(name) DXMT files; this release does not ship them.")
+        }
+
+        guard DXMTLibrary.isValid(dir) else {
+            throw PatchError.io("DXMT \(build.version) did not install correctly: x86_64-windows/d3d11.dll is missing afterwards.")
+        }
+        log("DXMT \(build.version) is in place.")
+        if let previousPatch { try? fm.removeItem(at: previousPatch) }
+        return stock
     }
 
     // MARK: - Rollback
