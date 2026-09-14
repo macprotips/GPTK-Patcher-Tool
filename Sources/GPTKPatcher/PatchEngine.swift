@@ -39,6 +39,11 @@ final class PatchEngine {
     var toolkitStatus: DropStatus = .empty
     var gptkVersion: String? { selectedToolkit?.version }
 
+    var dxmtBuilds: [DXMTBuild] = []
+    var selectedDXMT: DXMTBuild?
+    var importingDXMT: URL?
+    var dxmtStatus: DropStatus = .empty
+
     var patchedApps: [PatchedApp] = []
 
     private static let modeKey = "patchMode"
@@ -86,7 +91,7 @@ final class PatchEngine {
     var isImporting: Bool { importToken != nil }
     var isBusy: Bool { isRunning || isImporting }
     var compatibilityIssue: String? { selectedToolkit?.compatibilityIssue }
-    var isReady: Bool { crossOver != nil && selectedToolkit != nil && importingImage == nil && !isBusy && compatibilityIssue == nil }
+    var isReady: Bool { crossOver != nil && selectedToolkit != nil && importingImage == nil && importingDXMT == nil && !isBusy && compatibilityIssue == nil }
 
     /// The name the copy will get. Never replaces anything: if the name is taken, a counter is added.
     var outputName: String {
@@ -130,6 +135,9 @@ final class PatchEngine {
         case "dmg":
             guard !isImporting else { return false }
             importToolkit(from: url); return true
+        case _ where DXMTLibrary.looksLikeArchive(url):
+            guard importingDXMT == nil else { return false }
+            importDXMT(from: url); return true
         default: return false
         }
     }
@@ -236,6 +244,60 @@ final class PatchEngine {
         toolkitStatus = toolkits.isEmpty ? .empty : .ok(selectedToolkit?.version ?? "")
     }
 
+    // MARK: DXMT library
+
+    func refreshDXMT() {
+        dxmtBuilds = DXMTLibrary.list()
+        if let selected = selectedDXMT, let match = dxmtBuilds.first(where: { $0.version == selected.version }) {
+            selectedDXMT = match
+        } else if selectedDXMT != nil {
+            selectedDXMT = dxmtBuilds.first
+        }
+        if dxmtBuilds.isEmpty { dxmtStatus = .empty }
+    }
+
+    func selectDXMT(_ build: DXMTBuild) {
+        selectedDXMT = build
+        dxmtStatus = .ok(build.version)
+    }
+
+    /// Unpacks the archive into the library, then selects it.
+    func importDXMT(from url: URL) {
+        importingDXMT = url
+        dxmtStatus = .checking("Adding to the library…")
+        if case .cancelled = phase { phase = .idle }
+        let token = CancellationToken()
+        Task.detached(priority: .userInitiated) {
+            let result: Result<DXMTBuild, Error> = Result { try DXMTLibrary.importArchive(url, token: token) { _ in } }
+            await MainActor.run {
+                guard self.importingDXMT == url else { return }
+                self.importingDXMT = nil
+                switch result {
+                case .success(let build):
+                    self.dxmtBuilds = DXMTLibrary.list()
+                    self.selectedDXMT = self.dxmtBuilds.first { $0.version == build.version } ?? build
+                    self.dxmtStatus = .ok(build.version)
+                case .failure(let error):
+                    self.dxmtStatus = .failed(Self.reason(for: error))
+                }
+            }
+        }
+    }
+
+    func removeDXMT(_ build: DXMTBuild) {
+        try? DXMTLibrary.remove(build)
+        dxmtBuilds = DXMTLibrary.list()
+        if selectedDXMT?.version == build.version { selectedDXMT = dxmtBuilds.first }
+        dxmtStatus = selectedDXMT.map { .ok($0.version) } ?? .empty
+    }
+
+    /// Leaves the build in the library but takes it out of this patch.
+    func clearDXMT() {
+        importingDXMT = nil
+        selectedDXMT = nil
+        dxmtStatus = .empty
+    }
+
     // MARK: Patching
 
     func patch() {
@@ -267,7 +329,7 @@ final class PatchEngine {
             DispatchQueue.main.async { if self.isRunning { self.phase = .running(step) } }
         }
         let request = PatchRequest(
-            crossOver: crossOver, toolkit: toolkit, mode: mode,
+            crossOver: crossOver, toolkit: toolkit, dxmt: selectedDXMT, mode: mode,
             destination: mode == .inPlace ? crossOver.url : outputURL,
             applicationsFolder: applicationsFolder,
             replaceExisting: false, graphics: graphics, bottles: [])
