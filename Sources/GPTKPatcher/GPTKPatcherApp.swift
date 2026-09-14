@@ -76,6 +76,9 @@ enum HeadlessRunner {
     }
 
     static func runAndExit() -> Never {
+        // Line buffering, so a redirected or piped run keeps the log in step with the errors
+        // written to stderr instead of printing them out of order at the end.
+        setvbuf(stdout, nil, _IOLBF, 0)
         var args = Array(CommandLine.arguments.dropFirst())
         args.removeAll { $0 == "--cli" }
         if args.contains("--help") || args.contains("-h") { print(usage, terminator: ""); exit(0) }

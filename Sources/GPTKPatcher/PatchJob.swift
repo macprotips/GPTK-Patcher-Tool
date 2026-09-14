@@ -287,7 +287,7 @@ struct PatchJob {
 
         // 6. Environment: app-wide in the copy's etc/CrossOver.conf, then per bottle on top.
         var settings = request.graphics
-        if request.moltenVK != nil { settings.moltenVKShaderCache = true }
+        if request.moltenVK != nil { settings.moltenVKSettings = true }
         if settings.storeInCopy {
             let conf = copy.globalConfig
             try FileSafety.requireContained(conf, in: dst)

@@ -124,8 +124,10 @@ do not need to be changed.
   original as `libMoltenVK.dylib.stock`. CrossOver 26 has one in `lib64`; CrossOver Preview has one
   per architecture. A build is refused rather than installed if it does not contain the
   architecture a slot needs, since a mismatch breaks Vulkan with no visible cause. Choosing a build
-  also sets `MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM` and
-  `MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION`, which the Detroit build needs for its cache.
+  also sets `MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS`, without which Metal allows only 16 sampler
+  slots and the lighting shaders in Doom and Wolfenstein II fail to compile, along with
+  `MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM` and `MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION`,
+  which the Detroit build needs for its cache.
 - Replaces `lib/dxmt` when a DXMT build is chosen, keeping the original as `dxmt.stock`.
   Upstream releases ship x86_64 and i386 only, so anything else the bundled build had is
   carried over — CrossOver Preview's `aarch64` DXMT survives the swap.

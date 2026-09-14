@@ -344,9 +344,11 @@ enum DXMTConfig {
 struct GraphicsSettings: Sendable, Equatable {
     var fpsCap: Int? = nil
     var metalHUD = false
-    /// The two MoltenVK settings the Detroit build needs for its shader cache. Harmless elsewhere,
-    /// but only worth setting when a MoltenVK build is in use.
-    var moltenVKShaderCache = false
+    /// What a swapped-in MoltenVK build wants: a shader cache the Detroit build needs, and Metal
+    /// argument buffers. Without argument buffers Metal allows only 16 sampler slots, and the
+    /// lighting shaders in Doom and Wolfenstein II need more than that, so they fail to compile
+    /// and those passes never render. Only worth setting when a MoltenVK build is in use.
+    var moltenVKSettings = false
     var storeInCopy = true
 
     /// key → value; a nil value leaves whatever the file already has. DLSS → MetalFX is always on.
@@ -355,13 +357,14 @@ struct GraphicsSettings: Sendable, Equatable {
          ("DXMT_ENABLE_NVEXT", "1"),
          ("D3DM_MAX_FPS", fpsCap.map(String.init)),
          ("MTL_HUD_ENABLED", metalHUD ? "1" : nil),
-         ("MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM", moltenVKShaderCache ? "3" : nil),
-         ("MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION", moltenVKShaderCache ? "1" : nil)]
+         ("MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM", moltenVKSettings ? "3" : nil),
+         ("MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION", moltenVKSettings ? "1" : nil),
+         ("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", moltenVKSettings ? "1" : nil)]
     }
 
     var summary: String {
         "DLSS → MetalFX on" + (fpsCap.map { ", cap \($0) fps" } ?? "") + (metalHUD ? ", Metal HUD on" : "")
-            + (moltenVKShaderCache ? ", MoltenVK shader cache on" : "")
+            + (moltenVKSettings ? ", MoltenVK argument buffers and shader cache on" : "")
     }
 
     /// Human-readable outcome of `apply`.
