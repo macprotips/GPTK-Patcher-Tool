@@ -1,0 +1,55 @@
+# Builds the per-game MoltenVK libraries and attaches them to a release, so nobody has to
+# install Xcode and spend twenty minutes to play a Vulkan game. See scripts/build-moltenvk.sh
+# for what each profile changes and why.
+name: MoltenVK builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: MoltenVK git ref to build (a release tag, or main)
+        default: v1.4.2
+        required: true
+      release_tag:
+        description: Release to attach the builds to (blank uploads them as artifacts only)
+        required: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [idtech6, idtech7, detroit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.profile }}
+        run: scripts/build-moltenvk.sh "${{ matrix.profile }}" --ref "${{ inputs.ref }}" --out "$RUNNER_TEMP/builds"
+
+      - name: Check the library
+        run: |
+          dylib="$RUNNER_TEMP/builds/MoltenVK-${{ matrix.profile }}-${{ inputs.ref }}/libMoltenVK.dylib"
+          lipo -info "$dylib"
+          # Both architectures matter: CrossOver 26 loads the x86_64 slice, Preview also has arm64.
+          lipo -info "$dylib" | grep -q x86_64
+          lipo -info "$dylib" | grep -q arm64
+
+      - name: Package
+        run: |
+          cd "$RUNNER_TEMP/builds"
+          zip -r -q "$RUNNER_TEMP/MoltenVK-${{ matrix.profile }}-${{ inputs.ref }}.zip" \
+            "MoltenVK-${{ matrix.profile }}-${{ inputs.ref }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MoltenVK-${{ matrix.profile }}-${{ inputs.ref }}
+          path: ${{ runner.temp }}/MoltenVK-${{ matrix.profile }}-${{ inputs.ref }}.zip
+
+      - name: Attach to the release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ inputs.release_tag }}" \
+            "$RUNNER_TEMP/MoltenVK-${{ matrix.profile }}-${{ inputs.ref }}.zip" --clobber

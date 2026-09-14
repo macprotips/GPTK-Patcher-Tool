@@ -1,0 +1,84 @@
+From 97ac9f8a6c91fb2b1400a812272fd337c3ae292a Mon Sep 17 00:00:00 2001
+From: squidbus <175574877+squidbus@users.noreply.github.com>
+Date: Tue, 2 Jun 2026 18:14:45 -0700
+Subject: [PATCH] Hack to work around unbound vertex attributes
+
+---
+ MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm   | 22 +++++++++++++++++++
+ .../SPIRVToMSLConverter.cpp                   | 20 +++++++++++++++++
+ 2 files changed, 42 insertions(+)
+
+diff --git a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+index e67062da4..5f14efb73 100644
+--- a/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
++++ b/MoltenVK/MoltenVK/GPUObjects/MVKPipeline.mm
+@@ -1754,6 +1754,7 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+     }
+ 
+ 	// Vertex attributes
++	std::vector<uint32_t> boundLocations;
+ 	uint32_t vaCnt = pVI->vertexAttributeDescriptionCount;
+ 	for (uint32_t i = 0; i < vaCnt; i++) {
+ 		const VkVertexInputAttributeDescription* pVKVA = &pVI->pVertexAttributeDescriptions[i];
+@@ -1811,9 +1812,30 @@ static void addCommonImplicitBuffersToShaderConfig(SPIRVToMSLConversionConfigura
+ 			vaDesc.format = mtlFormat;
+ 			vaDesc.bufferIndex = (decltype(vaDesc.bufferIndex))getMetalBufferIndexForVertexAttributeBinding(vaBinding);
+ 			vaDesc.offset = vaOffset;
++
++			boundLocations.push_back(pVKVA->location);
++		}
++	}
++
++	bool needBufferZeroStride = false;
++	for (auto& ctxSI : shaderConfig.shaderInputs) {
++		if (ctxSI.outIsUsedByShader && ctxSI.shaderVar.builtin == spv::BuiltInMax && std::find(boundLocations.begin(), boundLocations.end(), ctxSI.shaderVar.location) == boundLocations.end()) {
++			reportWarning(VK_ERROR_VALIDATION_FAILED, "Shader uses unbound vertex attribute %u.", ctxSI.shaderVar.location);
++			auto vaDesc = inputDesc.attributes[ctxSI.shaderVar.location];
++			vaDesc.format = (decltype(vaDesc.format))getPixelFormats()->getMTLVertexFormat(VK_FORMAT_R8G8B8A8_UNORM);
++			vaDesc.bufferIndex = maxBinding != -1 ? (decltype(vaDesc.bufferIndex))getMetalBufferIndexForVertexAttributeBinding(maxBinding) : 0;
++			vaDesc.offset = 0;
++			needBufferZeroStride = maxBinding == -1;
+ 		}
+ 	}
+ 
++	if (needBufferZeroStride) {
++		auto vbDesc = inputDesc.layouts[0];
++		vbDesc.stride = 1;
++		vbDesc.stepFunction = (decltype(vbDesc.stepFunction))MTLStepFunctionConstant;
++		vbDesc.stepRate = 0;
++	}
++
+ 	// Run through the vertex bindings. Add a new Metal vertex layout for each translated binding,
+ 	// identical to the original layout. The translated binding will index into the same MTLBuffer,
+ 	// but at an offset that is one or more strides away from the original.
+diff --git a/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp b/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
+index 1eea17752..ad776aed3 100644
+--- a/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
++++ b/MoltenVKShaderConverter/MoltenVKShaderConverter/SPIRVToMSLConverter.cpp
+@@ -386,6 +386,26 @@ MVK_PUBLIC_SYMBOL bool SPIRVToMSLConverter::convert(SPIRVToMSLConversionConfigur
+ 			ctxSI.outIsUsedByShader = pMSLCompiler->is_msl_shader_input_used(ctxSI.shaderVar.location);
+ 		}
+ 	}
++	if (shaderConfig.options.entryPointStage == spv::ExecutionModelVertex) {
++		for (uint32_t i = 0; i < 30; i++) {
++			if (pMSLCompiler->is_msl_shader_input_used(i)) {
++				bool found = false;
++				for (auto& ctxSI : shaderConfig.shaderInputs) {
++					if (ctxSI.shaderVar.location == i) {
++						found = true;
++						break;
++					}
++				}
++				if (!found) {
++					MSLShaderInput si;
++					si.shaderVar.location = i;
++					si.binding = 0;
++					si.outIsUsedByShader = true;
++					shaderConfig.shaderInputs.push_back(si);
++				}
++			}
++		}
++	}
+ 	for (auto& ctxSO : shaderConfig.shaderOutputs) {
+ 		if (ctxSO.shaderVar.builtin != spv::BuiltInMax) {
+ 			ctxSO.outIsUsedByShader = pMSLCompiler->has_active_builtin(ctxSO.shaderVar.builtin, spv::StorageClassOutput);
