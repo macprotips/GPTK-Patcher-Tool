@@ -7,7 +7,8 @@ enum PatchMode: String, Sendable, CaseIterable {
 /// Everything a patch needs, captured before the job starts so later UI changes cannot affect it.
 struct PatchRequest: Sendable {
     let crossOver: CrossOverBundle
-    let toolkit: Toolkit
+    /// Optional when a DXMT build is given: the patch then only replaces DXMT.
+    var toolkit: Toolkit?
     /// Optional: also replace the CrossOver's bundled DXMT with this build.
     var dxmt: DXMTBuild?
     let mode: PatchMode
@@ -27,11 +28,11 @@ struct PatchReceipt: Codable {
     let sourceCrossOverVersion: String
     let stockD3DMetalVersion: String?
     let toolkitSource: String?
-    let toolkitPath: String
-    let gptkD3DMetalVersion: String
-    let gptkDirectory: String
-    let stockBackup: String
-    let dlssAliases: [String]
+    var toolkitPath: String?
+    var gptkD3DMetalVersion: String?
+    var gptkDirectory: String?
+    var stockBackup: String?
+    var dlssAliases: [String] = []
     var dxmtVersion: String?
     var dxmtStock: String?
     let environment: [String: String]
@@ -131,18 +132,26 @@ struct PatchJob {
         // 1. Make sure the stored toolkit is intact before touching anything.
         onStep(.checkingToolkit)
         try token.checkpoint()
-        let toolkit = request.toolkit
-        try GPTKSource.validateLib(toolkit.lib)
-        guard FileSafety.isSafeComponent(toolkit.version) else { throw PatchError.notGPTK("invalid version") }
-        if let issue = toolkit.compatibilityIssue { throw PatchError.io(issue) }
-        let installedVersion = D3DMetalInfo.read(inLib: toolkit.lib).version ?? toolkit.version
-        log("Toolkit: GPTK \(toolkit.version) (D3DMetal \(installedVersion)) from the library")
-        guard FileSafety.isSafeComponent(installedVersion) else { throw PatchError.notGPTK("invalid D3DMetal version") }
-        let patchedBefore = fm.fileExists(atPath: src.sharedSupport.appendingPathComponent("gptkpatcher-receipt.json").path)
-        if patchedBefore {
-            log("This CrossOver was patched before; the stock toolkit kept back then stays as the backup.")
-        } else if let stock = src.installedD3DMetalVersion, stock == installedVersion {
-            log("Note: this CrossOver already ships D3DMetal \(stock); it will carry the same build plus the nvngx aliases.")
+        guard request.toolkit != nil || request.dxmt != nil else {
+            throw PatchError.io("Nothing to install: choose a Game Porting Toolkit, a DXMT build, or both.")
+        }
+        var installedVersion: String?
+        if let toolkit = request.toolkit {
+            try GPTKSource.validateLib(toolkit.lib)
+            guard FileSafety.isSafeComponent(toolkit.version) else { throw PatchError.notGPTK("invalid version") }
+            if let issue = toolkit.compatibilityIssue { throw PatchError.io(issue) }
+            let version = D3DMetalInfo.read(inLib: toolkit.lib).version ?? toolkit.version
+            log("Toolkit: GPTK \(toolkit.version) (D3DMetal \(version)) from the library")
+            guard FileSafety.isSafeComponent(version) else { throw PatchError.notGPTK("invalid D3DMetal version") }
+            installedVersion = version
+            let patchedBefore = fm.fileExists(atPath: src.sharedSupport.appendingPathComponent("gptkpatcher-receipt.json").path)
+            if patchedBefore {
+                log("This CrossOver was patched before; the stock toolkit kept back then stays as the backup.")
+            } else if let stock = src.installedD3DMetalVersion, stock == version {
+                log("Note: this CrossOver already ships D3DMetal \(stock); it will carry the same build plus the nvngx aliases.")
+            }
+        } else {
+            log("No toolkit chosen; leaving this CrossOver's Game Porting Toolkit alone.")
         }
         onStep(.verifying)
         try AppSigning.validateSource(src, token: token, log: log)
@@ -163,18 +172,22 @@ struct PatchJob {
             log("Patching \(src.url.lastPathComponent) in place.")
         }
         let copy = try CrossOverBundle(url: dst)
+
+        // 3. Swap apple_gptk, when a toolkit was chosen.
+        onStep(.installing)
+        try token.checkpoint()
+        var outerGptkDir: URL?
+        var outerStockBackup: URL?
+        var outerPreviousPatch: URL?
+        var aliases: [String] = []
+        if let toolkit = request.toolkit {
         let gptkDir = try copy.gptkDirectory()
         let stockBackup = gptkDir.deletingLastPathComponent().appendingPathComponent("apple_gptk.stock")
         try FileSafety.requireContained(stockBackup, in: dst)
-
-        // 3. Swap apple_gptk.
-        onStep(.installing)
-        try token.checkpoint()
         log("GPTK directory: \(gptkDir.path)")
         if fm.isDirectory(gptkDir.deletingLastPathComponent().appendingPathComponent("apple_gptk3")) {
             log("This build also bundles GPTK 3 (apple_gptk3). It is left alone; bottles set to D3DMetal 3 (CX_GRAPHICS_BACKEND_VERSION=3) keep using it, all others use the patched toolkit.")
         }
-        var previousPatch: URL?
         if fm.fileExists(atPath: stockBackup.path) {
             // Patched before: the real stock is already backed up and the current folder is an
             // earlier patch. Set it aside until the new one is verified.
@@ -184,7 +197,7 @@ struct PatchJob {
                 throw PatchError.io("An interrupted patch left recovery files at \(previous.path). Keep that folder and restore it as apple_gptk before retrying, or start from a fresh CrossOver download.")
             }
             try fm.moveItem(at: gptkDir, to: previous)
-            previousPatch = previous
+            outerPreviousPatch = previous
             rollback = { restore(previous, to: gptkDir, what: "previous") }
         } else {
             try fm.moveItem(at: gptkDir, to: stockBackup)
@@ -204,9 +217,13 @@ struct PatchJob {
         // 4. Make sure nothing CrossOver relies on went missing, then add the DLSS aliases.
         try carryOverLooseExternalFiles(stock: stockBackup, new: gptkDir)
         reportMissingWineFiles(stock: stockBackup, new: gptkDir)
-        let aliases = try createNvngxAliases(in: gptkDir)
+        aliases = try createNvngxAliases(in: gptkDir)
         if aliases.isEmpty {
             log("Warning: no \(aliasPrefix)* files were found, so no nvngx aliases were created.")
+        }
+        try verify(gptkDir: gptkDir, expectAliases: !aliases.isEmpty)
+        outerGptkDir = gptkDir
+        outerStockBackup = stockBackup
         }
 
         // 5. Optionally replace DXMT, the other translation layer CrossOver bundles.
@@ -218,14 +235,14 @@ struct PatchJob {
         // 6. Verify and record what happened.
         onStep(.finalizing)
         try token.checkpoint()
-        try verify(gptkDir: gptkDir, expectAliases: !aliases.isEmpty)
         let receipt = PatchReceipt(
             tool: "GPTKPatcher " + Self.toolVersion, date: Date(),
             sourceCrossOver: src.url.path, sourceCrossOverVersion: src.version,
-            stockD3DMetalVersion: D3DMetalInfo.read(inLib: stockBackup).version ?? src.installedD3DMetalVersion,
-            toolkitSource: toolkit.sourceName, toolkitPath: toolkit.lib.path, gptkD3DMetalVersion: installedVersion,
-            gptkDirectory: String(gptkDir.path.dropFirst(dst.path.count + 1)),
-            stockBackup: String(stockBackup.path.dropFirst(dst.path.count + 1)), dlssAliases: aliases,
+            stockD3DMetalVersion: outerStockBackup.map { D3DMetalInfo.read(inLib: $0).version } ?? src.installedD3DMetalVersion,
+            toolkitSource: request.toolkit?.sourceName, toolkitPath: request.toolkit?.lib.path,
+            gptkD3DMetalVersion: installedVersion,
+            gptkDirectory: outerGptkDir.map { String($0.path.dropFirst(dst.path.count + 1)) },
+            stockBackup: outerStockBackup.map { String($0.path.dropFirst(dst.path.count + 1)) }, dlssAliases: aliases,
             dxmtVersion: request.dxmt?.version, dxmtStock: dxmtStock.map { String($0.path.dropFirst(dst.path.count + 1)) },
             environment: Dictionary(uniqueKeysWithValues: request.graphics.assignments.compactMap { key, value in value.map { (key, $0) } }))
         let encoder = JSONEncoder()
@@ -262,7 +279,7 @@ struct PatchJob {
         onStep(.signing)
         // Repatching's temporary backup is inside the bundle: remove it before sealing, but
         // keep it in the transaction directory until success so signing can still roll back.
-        if let previousPatch {
+        if let previousPatch = outerPreviousPatch, let gptkDir = outerGptkDir {
             let kept = backup.directory.appendingPathComponent("previous-toolkit")
             try fm.moveItem(at: previousPatch, to: kept)
             rollback = { restore(kept, to: gptkDir, what: "previous") }
@@ -311,7 +328,10 @@ struct PatchJob {
             }
         }
 
-        log("Done. \(finalURL.lastPathComponent) now carries D3DMetal \(installedVersion).")
+        var carries: [String] = []
+        if let installedVersion { carries.append("D3DMetal \(installedVersion)") }
+        if let build = request.dxmt { carries.append("DXMT \(build.version)") }
+        log("Done. \(finalURL.lastPathComponent) now carries \(carries.joined(separator: " and ")).")
         return finalURL
     }
 

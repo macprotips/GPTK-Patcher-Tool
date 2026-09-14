@@ -52,7 +52,7 @@ struct GPTKPatcherApp: App {
 }
 
 /// `GPTKPatcher --cli --quit-bottle <name>` ends everything running in that bottle; `--bottle-status <name>` only lists it.
-/// `GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version> [destination.app] [--in-place] [--replace] [--fps N] [--hud] [--dxmt ARCHIVE|VERSION] [--no-copy-env] [--bottle NAME]...`
+/// `GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version | none> [destination.app] [--in-place] [--replace] [--fps N] [--hud] [--dxmt ARCHIVE|VERSION] [--no-copy-env] [--bottle NAME]...`
 /// Runs the same job without the window, for scripting and testing.
 enum HeadlessRunner {
     private static func quitBottleAndExit(named name: String, dryRun: Bool) -> Never {
@@ -152,8 +152,10 @@ enum HeadlessRunner {
                 if open { fail("\(name) is running. Quit it before patching it in place.") }
             }
             let toolkitArg = positional[1]
-            let toolkit: Toolkit
-            if toolkitArg.lowercased().hasSuffix(".dmg") {
+            var toolkit: Toolkit?
+            if toolkitArg.lowercased() == "none" {
+                guard dxmtArg != nil else { fail("with a toolkit of 'none' you must pass --dxmt", status: 64) }
+            } else if toolkitArg.lowercased().hasSuffix(".dmg") {
                 toolkit = try ToolkitLibrary.importImage(URL(fileURLWithPath: toolkitArg), token: token) { print($0) }
             } else if let stored = ToolkitLibrary.list().first(where: { $0.version == toolkitArg || $0.displayName == toolkitArg }) {
                 toolkit = stored
