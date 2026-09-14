@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @Bindable var engine = PatchEngine.shared
     var loadsData = true
+    @State private var contentHeight: CGFloat = 0
     @State private var showLog = false
     @State private var showWhatChanges = false
     @State private var showSupportNotice = false
@@ -15,10 +16,8 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(.bottom, 22)
-            if case .idle = engine.phase { modePicker.padding(.bottom, 28) }
-            else if case .cancelled = engine.phase { modePicker.padding(.bottom, 28) }
-            else { Color.clear.frame(height: 0).padding(.bottom, 12) }
+                .padding(.bottom, isChoosing ? 22 : 26)
+            if isChoosing { modePicker.padding(.bottom, 22) }
 
             Group {
                 switch engine.phase {
@@ -33,10 +32,13 @@ struct ContentView: View {
         }
         .padding(.horizontal, 30)
         .padding(.top, 26)
-        .padding(.bottom, 26)
+        .padding(.bottom, 22)
         .frame(width: width)
         .fixedSize(horizontal: false, vertical: true)
-        .background(WindowConfigurator())
+        .background(GeometryReader { proxy in
+            Color.clear.onChange(of: proxy.size.height, initial: true) { _, height in contentHeight = height }
+        })
+        .background(WindowConfigurator(contentHeight: contentHeight, width: width))
         .background(PasteCatcher { engine.pasteFromPasteboard() })
         .sheet(isPresented: $showLog) { LogSheet(lines: engine.logLines) }
         .sheet(isPresented: $showSupportNotice) { SupportNoticeSheet { acknowledgedSupportNotice = true } }
@@ -64,13 +66,25 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("GPTK Patcher Tool")
                 .font(.title2.weight(.semibold))
-            Text(engine.mode == .copy
-                 ? "Update the Game Porting Toolkit in a copy of CrossOver."
-                 : "Update the Game Porting Toolkit in your CrossOver.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            // The subtitle tells you what the form in front of you will do. Once the patch is
+            // running or finished it is describing something you are no longer choosing.
+            if isChoosing {
+                Text(engine.mode == .copy
+                     ? "Update the Game Porting Toolkit in a copy of CrossOver."
+                     : "Update the Game Porting Toolkit in your CrossOver.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    /// The form is on screen: idle, or back from a cancelled patch.
+    private var isChoosing: Bool {
+        switch engine.phase {
+        case .idle, .cancelled: return true
+        default: return false
+        }
     }
 
     private var modePicker: some View {
@@ -100,11 +114,8 @@ struct ContentView: View {
             }
 
             if engine.crossOverInstructions == nil && engine.compatibilityIssue == nil && !engine.isImporting {
-                HStack(alignment: .top, spacing: 16) {
-                    DXMTRow(engine: engine)
-                    MoltenVKRow(engine: engine)
-                }
-                .padding(.top, 8)
+                DXMTRow(engine: engine).padding(.top, 10)
+                advancedSection.padding(.top, 16)
             }
 
             if let instructions = engine.crossOverInstructions {
@@ -134,11 +145,11 @@ struct ContentView: View {
             }
 
             if engine.mode == .copy {
-                destinationRow.padding(.top, 24)
+                destinationRow.padding(.top, 18)
             }
 
             if showsOutputSection {
-                if engine.mode == .copy { Divider().padding(.vertical, 18) }
+                if engine.mode == .copy { Divider().padding(.vertical, 14) }
                 outputSection.padding(.top, engine.mode == .copy ? 0 : 24)
             }
 
@@ -169,8 +180,41 @@ struct ContentView: View {
                 }
               }
             }
-            .frame(height: CGFloat(min(engine.patchedApps.count + (showsPlannedOutput ? 1 : 0), 4)) * 54)
+            .frame(height: CGFloat(min(engine.patchedApps.count + (showsPlannedOutput ? 1 : 0), 3)) * 54)
             .modifier(InputTileChrome(targeted: false, isEmpty: false, isError: false, cornerRadius: 10))
+        }
+    }
+
+    /// Everything past the usual two components lives here, closed by default so the window stays
+    /// short. It opens itself when one of its settings is already in use.
+    private var advancedSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                // Not animated: the window follows the content height, and a height that is still
+                // animating settles a few points short of where the content actually ends up.
+                engine.showsAdvanced.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .rotationEffect(.degrees(engine.showsAdvanced ? 90 : 0))
+                    Text("Advanced")
+                    // Nothing in here is hidden state: what it holds is named while it is closed.
+                    if !engine.showsAdvanced, let build = engine.selectedMoltenVK {
+                        Text("· MoltenVK \u{201C}\(build.displayName)\u{201D}")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("Advanced options")
+            .accessibilityValue(engine.showsAdvanced ? "expanded" : "collapsed")
+
+            if engine.showsAdvanced { MoltenVKRow(engine: engine) }
         }
     }
 
@@ -239,7 +283,6 @@ struct ContentView: View {
 
     private func progress(_ current: PatchStep) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Spacer()
             Text(engine.isCancelling ? "Cancelling and restoring files…" : "Patching CrossOver…")
                 .font(.headline)
                 .padding(.bottom, 4)
@@ -270,7 +313,6 @@ struct ContentView: View {
                     .accessibilityValue(index < position ? "done" : index == position ? "in progress" : "pending")
                 }
             }
-            Spacer()
             HStack {
                 Text(engine.logLines.last ?? "")
                     .font(.caption)
@@ -283,15 +325,14 @@ struct ContentView: View {
                     .keyboardShortcut(.cancelAction)
                     .disabled(engine.isCancelling)
             }
+            .padding(.top, 24)
         }
-        .frame(height: 300)
     }
 
     // MARK: Done
 
     private func success(_ url: URL) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Spacer()
             HStack(spacing: 10) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 22))
@@ -315,7 +356,6 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 12)
-            Spacer()
             HStack {
                 Button("Details…") { showLog = true }
                 Spacer()
@@ -325,15 +365,14 @@ struct ContentView: View {
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
             }
+            .padding(.top, 24)
         }
-        .frame(height: 300)
     }
 
     // MARK: Failed
 
     private func failed(_ failure: Failure) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Spacer()
             HStack(spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 22))
@@ -350,11 +389,11 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: 150)
+            .fixedSize(horizontal: false, vertical: true)
             Text("Details includes the patch log and any recovery steps.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.top, 10)
-            Spacer()
             HStack {
                 Button("Details…") { showLog = true }
                 Spacer()
@@ -362,8 +401,8 @@ struct ContentView: View {
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
             }
+            .padding(.top, 24)
         }
-        .frame(height: 300)
     }
 
     // MARK: Helpers
@@ -393,7 +432,7 @@ private struct WhatChangesPopover: View {
             } else {
                 bullet("Modifies the selected CrossOver.app directly and adds the toolkit version to its name. Quit CrossOver before patching it.")
             }
-            bullet("Replaces the app's built-in D3DMetal with the version from the toolkit, keeping the original as apple_gptk.stock so the change can be undone. Choose \"Leave the toolkit as it is\" to skip it and update only DXMT.")
+            bullet("Replaces the app's built-in D3DMetal with the version from the toolkit, keeping the original as apple_gptk.stock so the change can be undone. Set the toolkit to Unchanged to skip it and update only DXMT.")
             bullet("Adds the nvngx.dll that games with DLSS look for, and turns DLSS to MetalFX on for every bottle the app launches.")
             bullet("Checks the original app's signature, then signs and verifies the modified app for local use. Its embedded libraries retain their signatures. The local copy's download metadata is cleared so macOS can open it from this location.")
             bullet("Replaces the bundled MoltenVK, the Vulkan driver, when a build is chosen. That is what Doom, Wolfenstein and Detroit: Become Human need. Every copy the app ships is replaced, each original kept as libMoltenVK.dylib.stock, and a build is refused if it does not match the architecture CrossOver needs.")
@@ -446,7 +485,12 @@ private struct LogSheet: View {
 }
 
 /// Makes the window draggable by its background and keeps it at its content size.
+/// Keeps the window exactly as tall as the content. The window is not user-resizable, so nothing
+/// resizes it when a section such as Advanced opens; this does.
 private struct WindowConfigurator: NSViewRepresentable {
+    let contentHeight: CGFloat
+    let width: CGFloat
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         DispatchQueue.main.async {
@@ -458,12 +502,45 @@ private struct WindowConfigurator: NSViewRepresentable {
         }
         return view
     }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let latest = context.coordinator
+        latest.height = contentHeight
+        guard contentHeight > 0 else { return }
+        fit(nsView, to: latest)
+        // Heights reported while a section is animating open are part-way values, so take the
+        // settled one shortly after as well.
+        guard !latest.checking else { return }
+        latest.checking = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            latest.checking = false
+            fit(nsView, to: latest)
+        }
+    }
+
+    func makeCoordinator() -> Latest { Latest() }
+
+    final class Latest {
+        var height: CGFloat = 0
+        var checking = false
+    }
+
+    private func fit(_ nsView: NSView, to latest: Latest) {
+        DispatchQueue.main.async {
+            guard let window = nsView.window, latest.height > 0,
+                  abs(window.frame.height - latest.height) > 0.5 else { return }
+            // Grow downwards from the title bar rather than from the bottom edge.
+            var frame = window.frame
+            frame.origin.y += frame.height - latest.height
+            frame.size = NSSize(width: width, height: latest.height)
+            window.setFrame(frame, display: true, animate: false)
+        }
+    }
 }
 
 /// Environment-variable hooks for screenshots and testing. They do nothing unless set.
 ///   GPTKPATCHER_CROSSOVER=<path>  GPTKPATCHER_DMG=<path>  GPTKPATCHER_OUTPUT=<folder>
-///   GPTKPATCHER_PASTE=1  GPTKPATCHER_AUTOPATCH=1  GPTKPATCHER_OPEN_SETTINGS=1  GPTKPATCHER_SKIP_NOTICE=1
+///   GPTKPATCHER_PASTE=1  GPTKPATCHER_AUTOPATCH=1  GPTKPATCHER_OPEN_SETTINGS=1  GPTKPATCHER_SKIP_NOTICE=1  GPTKPATCHER_ADVANCED=1
 ///   GPTKPATCHER_APPEARANCE=light|dark
 enum DebugHooks {
     @MainActor
@@ -475,6 +552,7 @@ enum DebugHooks {
         }
         if let path = env["GPTKPATCHER_CROSSOVER"] { engine.setCrossOver(URL(fileURLWithPath: path)) }
         if env["GPTKPATCHER_PASTE"] == "1" { engine.pasteFromPasteboard() }
+        if env["GPTKPATCHER_ADVANCED"] == "1" { engine.showsAdvanced = true }
         if let path = env["GPTKPATCHER_OUTPUT"] { engine.useTemporaryOutputFolder(URL(fileURLWithPath: path)) }
         if let path = env["GPTKPATCHER_DMG"] {
             engine.importToolkit(from: URL(fileURLWithPath: path))
@@ -680,12 +758,9 @@ private struct ExtraRow<MenuItems: View>: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            SectionLabel(label)
-            content
-            Spacer(minLength: 4)
+            control
             trailing
         }
-        .padding(.leading, 12)
         .padding(.trailing, 8)
         .frame(height: 38)
         .modifier(InputTileChrome(targeted: targeted, hovering: hovering, isEmpty: title == nil, isError: isError))
@@ -699,19 +774,21 @@ private struct ExtraRow<MenuItems: View>: View {
 
     private var isError: Bool { if case .failed = status { return true } else { return false } }
 
+    /// The menu or the add button, stretched across the row so a click anywhere in the pill lands
+    /// on it rather than only on the words.
     @ViewBuilder
-    private var content: some View {
+    private var control: some View {
         switch status {
         case .checking:
-            Text("Adding…").foregroundStyle(.secondary).lineLimit(1)
+            row { Text("Adding…").foregroundStyle(.secondary).lineLimit(1) }
         case .failed(let text):
-            Text(text).font(.caption).foregroundStyle(.red).lineLimit(2)
+            row { Text(text).font(.caption).foregroundStyle(.red).lineLimit(2) }
         case .empty, .ok:
             if title != nil || hasLibrary {
                 Menu {
                     menuItems()
                 } label: {
-                    HStack(spacing: 4) {
+                    row {
                         Text(title ?? "Unchanged")
                             .foregroundStyle(title == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                             .lineLimit(1)
@@ -720,22 +797,34 @@ private struct ExtraRow<MenuItems: View>: View {
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(.secondary)
                     }
-                    .contentShape(Rectangle())
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
             } else {
                 Button(action: onAdd) {
-                    Text(targeted ? "Release to add" : prompt)
-                        .foregroundStyle(targeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .contentShape(Rectangle())
+                    row {
+                        Text(targeted ? "Release to add" : prompt)
+                            .foregroundStyle(targeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                 }
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    /// The row's own label, then the value, then all the empty space to the right of it.
+    private func row<Value: View>(@ViewBuilder _ value: () -> Value) -> some View {
+        HStack(spacing: 8) {
+            SectionLabel(label)
+            HStack(spacing: 4) { value() }
+            Spacer(minLength: 4)
+        }
+        .padding(.leading, 12)
+        .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
@@ -773,9 +862,12 @@ private struct DXMTRow: View {
                      for url in urls where engine.route(url) { accepted = true }
                      return accepted
                  }) {
+            // "Unchanged" is one of the choices rather than a separate command, so the menu is a
+            // single list of what this patch will do to DXMT.
             Picker("DXMT version", selection: Binding(
                 get: { engine.selectedDXMT },
-                set: { if let build = $0 { engine.selectDXMT(build) } })) {
+                set: { if let build = $0 { engine.selectDXMT(build) } else { engine.clearDXMT() } })) {
+                    Text("Unchanged").tag(DXMTBuild?.none)
                     ForEach(engine.dxmtBuilds) { build in
                         Text(build.displayName).tag(Optional(build))
                     }
@@ -785,7 +877,6 @@ private struct DXMTRow: View {
             Divider()
             Button("Add DXMT Release…", action: openPanel)
             if let build = engine.selectedDXMT {
-                Button("Leave DXMT as it is") { engine.clearDXMT() }
                 Button("Remove \(build.displayName) from Library", role: .destructive) { engine.removeDXMT(build) }
             }
         }
@@ -825,7 +916,8 @@ private struct MoltenVKRow: View {
                  }) {
             Picker("MoltenVK build", selection: Binding(
                 get: { engine.selectedMoltenVK },
-                set: { if let build = $0 { engine.selectMoltenVK(build) } })) {
+                set: { if let build = $0 { engine.selectMoltenVK(build) } else { engine.clearMoltenVK() } })) {
+                    Text("Unchanged").tag(MoltenVKBuild?.none)
                     ForEach(engine.moltenVKBuilds) { build in
                         Text(build.displayName).tag(Optional(build))
                     }
@@ -836,7 +928,6 @@ private struct MoltenVKRow: View {
             Button("Add MoltenVK Build…", action: openPanel)
             if let build = engine.selectedMoltenVK {
                 Text(build.detail)
-                Button("Leave MoltenVK as it is") { engine.clearMoltenVK() }
                 Button("Remove \(build.displayName) from Library", role: .destructive) { engine.removeMoltenVK(build) }
             }
         }
