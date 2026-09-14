@@ -176,6 +176,8 @@ struct PatchJob {
             log("Patching \(src.url.lastPathComponent) in place.")
         }
         let copy = try CrossOverBundle(url: dst)
+        // What an earlier patch left behind, if this app (or the app it was copied from) has one.
+        let previous = existingReceipt(in: copy)
 
         // 3. Swap apple_gptk, when a toolkit was chosen.
         onStep(.installing)
@@ -230,31 +232,49 @@ struct PatchJob {
         outerStockBackup = stockBackup
         }
 
-        // 5. Optionally replace DXMT, the other translation layer CrossOver bundles.
+        // 5. Optionally replace DXMT, the other translation layer CrossOver bundles. Re-patching
+        //    with the build that is already in there leaves it alone; only the toolkit changes.
         var dxmtStock: URL?
         if let build = request.dxmt {
-            dxmtStock = try installDXMT(build, in: copy, within: dst, rollback: &rollback)
+            if let kept = installedDXMT(build, in: copy, receipt: previous) {
+                log("DXMT \(build.version) is already installed here; leaving it as it is.")
+                dxmtStock = kept
+            } else {
+                dxmtStock = try installDXMT(build, in: copy, within: dst, backup: backup)
+            }
         }
 
         // 6. Optionally replace MoltenVK, the Vulkan driver Doom, Wolfenstein and Detroit use.
         var moltenVKSlots: [String] = []
         if let build = request.moltenVK {
-            moltenVKSlots = try installMoltenVK(build, in: copy, within: dst, rollback: &rollback)
+            if let kept = installedMoltenVK(build, in: copy, receipt: previous, within: dst) {
+                log("MoltenVK \u{201C}\(build.name)\u{201D} is already installed here; leaving it as it is.")
+                moltenVKSlots = kept
+            } else {
+                moltenVKSlots = try installMoltenVK(build, in: copy, within: dst, backup: backup)
+            }
         }
 
-        // 7. Verify and record what happened.
+        // 7. Verify and record what happened. A component this run left alone is still in the app,
+        //    so what an earlier patch recorded about it is carried forward rather than dropped:
+        //    the receipt has to describe the app as it now is, not just this one run.
         onStep(.finalizing)
         try token.checkpoint()
         let receipt = PatchReceipt(
             tool: "GPTKPatcher " + Self.toolVersion, date: Date(),
             sourceCrossOver: src.url.path, sourceCrossOverVersion: src.version,
-            stockD3DMetalVersion: outerStockBackup.map { D3DMetalInfo.read(inLib: $0).version } ?? src.installedD3DMetalVersion,
-            toolkitSource: request.toolkit?.sourceName, toolkitPath: request.toolkit?.lib.path,
-            gptkD3DMetalVersion: installedVersion,
-            gptkDirectory: outerGptkDir.map { String($0.path.dropFirst(dst.path.count + 1)) },
-            stockBackup: outerStockBackup.map { String($0.path.dropFirst(dst.path.count + 1)) }, dlssAliases: aliases,
-            dxmtVersion: request.dxmt?.version, dxmtStock: dxmtStock.map { String($0.path.dropFirst(dst.path.count + 1)) },
-            moltenVKBuild: request.moltenVK?.name, moltenVKSlots: moltenVKSlots.isEmpty ? nil : moltenVKSlots,
+            stockD3DMetalVersion: outerStockBackup.map { D3DMetalInfo.read(inLib: $0).version }
+                ?? previous?.stockD3DMetalVersion ?? src.installedD3DMetalVersion,
+            toolkitSource: request.toolkit?.sourceName ?? previous?.toolkitSource,
+            toolkitPath: request.toolkit?.lib.path ?? previous?.toolkitPath,
+            gptkD3DMetalVersion: installedVersion ?? previous?.gptkD3DMetalVersion,
+            gptkDirectory: outerGptkDir.map { String($0.path.dropFirst(dst.path.count + 1)) } ?? previous?.gptkDirectory,
+            stockBackup: outerStockBackup.map { String($0.path.dropFirst(dst.path.count + 1)) } ?? previous?.stockBackup,
+            dlssAliases: aliases.isEmpty ? (previous?.dlssAliases ?? []) : aliases,
+            dxmtVersion: request.dxmt?.version ?? previous?.dxmtVersion,
+            dxmtStock: dxmtStock.map { String($0.path.dropFirst(dst.path.count + 1)) } ?? previous?.dxmtStock,
+            moltenVKBuild: request.moltenVK?.name ?? previous?.moltenVKBuild,
+            moltenVKSlots: (moltenVKSlots.isEmpty ? nil : moltenVKSlots) ?? previous?.moltenVKSlots,
             environment: Dictionary(uniqueKeysWithValues: request.graphics.assignments.compactMap { key, value in value.map { (key, $0) } }))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -305,10 +325,10 @@ struct PatchJob {
         //    Preflight requires its bottle sessions to be stopped before files or paths change.
         var finalURL = dst
         if request.mode == .inPlace {
-            let wanted = "\(src.name) (GPTK \(installedVersion)).app"
+            let wanted = "\(src.name) (\(Self.nameComponent(for: receipt))).app"
             let target = dst.deletingLastPathComponent().appendingPathComponent(wanted)
             if dst.lastPathComponent == wanted {
-                log("Name already carries the toolkit version.")
+                log("Name already says what this copy carries.")
             } else if fm.fileExists(atPath: target.path) {
                 log("Kept the name \(dst.lastPathComponent): \(wanted) already exists in that folder.")
             } else {
@@ -348,11 +368,65 @@ struct PatchJob {
         return finalURL
     }
 
+    /// What a patched app is named after: its toolkit, or the next component down when there is
+    /// no toolkit in it, so a DXMT- or MoltenVK-only patch is not labelled with a version it has not got.
+    static func nameComponent(for receipt: PatchReceipt) -> String {
+        if let version = receipt.gptkD3DMetalVersion { return "GPTK \(version)" }
+        if let version = receipt.dxmtVersion { return "DXMT \(version)" }
+        return "MoltenVK"
+    }
+
+    /// The receipt this CrossOver already carries, if it was patched before.
+    private func existingReceipt(in copy: CrossOverBundle) -> PatchReceipt? {
+        guard let data = try? Data(contentsOf: copy.sharedSupport.appendingPathComponent("gptkpatcher-receipt.json"))
+        else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(PatchReceipt.self, from: data)
+    }
+
+    /// The stock backup, when this build is already the one installed: the receipt names it, the
+    /// folder is intact, and the original is still kept beside it. Nil means install it.
+    private func installedDXMT(_ build: DXMTBuild, in copy: CrossOverBundle, receipt: PatchReceipt?) -> URL? {
+        guard let version = receipt?.dxmtVersion, version == build.version else { return nil }
+        let dir = copy.sharedSupport.appendingPathComponent("lib/dxmt")
+        let stock = dir.deletingLastPathComponent().appendingPathComponent("dxmt.stock")
+        guard FileSafety.exists(stock), DXMTLibrary.isValid(dir) else { return nil }
+        // Same version number is not proof of the same files: a release re-imported under a version
+        // already used has to be installed, not assumed to be in there.
+        let marker = "x86_64-windows/d3d11.dll"
+        guard fileSize(dir.appendingPathComponent(marker)) == fileSize(build.path.appendingPathComponent(marker)) else {
+            return nil
+        }
+        return stock
+    }
+
+    /// The slots already holding this build, or nil. Build names come from file names, so the
+    /// sizes are compared too: a different library imported under a name used before is not a match.
+    private func installedMoltenVK(_ build: MoltenVKBuild, in copy: CrossOverBundle,
+                                   receipt: PatchReceipt?, within bundle: URL) -> [String]? {
+        guard let name = receipt?.moltenVKBuild, name == build.name,
+              let slots = receipt?.moltenVKSlots, !slots.isEmpty,
+              let size = fileSize(build.dylib) else { return nil }
+        let live = Set(copy.moltenVKSlots().map { $0.path })
+        for relative in slots {
+            let slot = bundle.appendingPathComponent(relative)
+            guard FileSafety.contains(slot, in: bundle), live.contains(slot.path),
+                  FileSafety.exists(slot.appendingPathExtension("stock")),
+                  fileSize(slot) == size else { return nil }
+        }
+        return slots
+    }
+
+    private func fileSize(_ url: URL) -> Int? {
+        (try? fm.attributesOfItem(atPath: url.path)[.size] as? Int) ?? nil
+    }
+
     /// Replaces `lib/dxmt` with a build from the library, keeping the first stock copy as
     /// `dxmt.stock`. Anything the release does not ship is carried over from the stock folder, so a
     /// CrossOver that bundles ARM64 DXMT keeps it. Returns the backup path.
     private func installDXMT(_ build: DXMTBuild, in copy: CrossOverBundle, within bundle: URL,
-                             rollback: inout (() -> [String])?) throws -> URL? {
+                             backup: FileBackup) throws -> URL? {
         try token.checkpoint()
         guard DXMTLibrary.isValid(build.path) else {
             throw PatchError.io("The library copy of DXMT \(build.version) is incomplete. Remove it from the DXMT menu and import the archive again.")
@@ -366,22 +440,16 @@ struct PatchJob {
         try FileSafety.requireContained(stock, in: bundle)
 
         try Shell.check("/bin/chmod", ["-R", "u+w", dir.path], token: token)
-        let previousRollback = rollback
-        var previousPatch: URL?
-        if FileSafety.exists(stock) {
-            // Patched before: the real stock is already kept, so this folder is an earlier build.
-            let previous = dir.deletingLastPathComponent().appendingPathComponent(".dxmt.previous")
-            guard !FileSafety.exists(previous) else {
-                throw PatchError.io("An interrupted patch left recovery files at \(previous.path). Keep that folder and restore it as dxmt before retrying.")
-            }
-            try fm.moveItem(at: dir, to: previous)
-            previousPatch = previous
-            rollback = { self.restore(previous, to: dir, what: "previous DXMT") + (previousRollback?() ?? []) }
-        } else {
-            try fm.moveItem(at: dir, to: stock)
+        // The job's backup holds this folder as it is right now — the stock DXMT, or the build an
+        // earlier patch installed — so any later failure puts that exact folder back rather than
+        // dropping to stock. Capturing the backup path too removes a stock copy made here.
+        try backup.capture(dir)
+        try backup.capture(stock)
+        if !FileSafety.exists(stock) {
+            try fm.copyItem(at: dir, to: stock)
             log("Kept the stock DXMT as \(stock.lastPathComponent)")
-            rollback = { self.restore(stock, to: dir, what: "stock DXMT") + (previousRollback?() ?? []) }
         }
+        try fm.removeItem(at: dir)
 
         try fm.createDirectory(at: dir, withIntermediateDirectories: false)
         log("Copying DXMT \(build.version) files from the library…")
@@ -403,7 +471,6 @@ struct PatchJob {
             throw PatchError.io("DXMT \(build.version) did not install correctly: x86_64-windows/d3d11.dll is missing afterwards.")
         }
         log("DXMT \(build.version) is in place.")
-        if let previousPatch { try? fm.removeItem(at: previousPatch) }
         return stock
     }
 
@@ -412,10 +479,10 @@ struct PatchJob {
     /// that slot's architecture: an arm64-only library in CrossOver 26's x86_64 slot would leave
     /// Vulkan broken with no obvious cause. Returns the slots written, relative to the bundle.
     private func installMoltenVK(_ build: MoltenVKBuild, in copy: CrossOverBundle, within bundle: URL,
-                                 rollback: inout (() -> [String])?) throws -> [String] {
+                                 backup: FileBackup) throws -> [String] {
         try token.checkpoint()
         guard MoltenVKLibrary.isValid(build.path) else {
-            throw PatchError.io("The library copy of the MoltenVK build “\(build.name)” is incomplete. Remove it from the MoltenVK menu and add it again.")
+            throw PatchError.io("The library copy of the MoltenVK build \u{201C}\(build.name)\u{201D} is incomplete. Remove it from the MoltenVK menu and add it again.")
         }
         let slots = copy.moltenVKSlots()
         guard !slots.isEmpty else {
@@ -423,23 +490,7 @@ struct PatchJob {
             return []
         }
         let supplied = Set(build.architectures)
-        var written: [(slot: URL, stock: URL)] = []
         var relative: [String] = []
-        let previousRollback = rollback
-        // Put every slot back, not just the last one, if a later step fails.
-        func undoAll() -> [String] {
-            var problems: [String] = []
-            for item in written.reversed() {
-                do {
-                    if FileSafety.exists(item.slot) { try fm.removeItem(at: item.slot) }
-                    try fm.moveItem(at: item.stock, to: item.slot)
-                } catch {
-                    problems.append("Couldn't restore \(item.slot.path): \(error.localizedDescription). The original is at \(item.stock.path).")
-                }
-            }
-            if problems.isEmpty && !written.isEmpty { log("Restored the stock MoltenVK.") }
-            return problems
-        }
 
         for slot in slots {
             try token.checkpoint()
@@ -450,19 +501,23 @@ struct PatchJob {
             }
             let stock = slot.appendingPathExtension("stock")
             try FileSafety.requireContained(stock, in: bundle)
+            // The job's backup holds what this slot has right now — the stock library, or the build
+            // an earlier patch put there — so a failure anywhere later puts that exact file back
+            // instead of dropping to stock. Capturing the .stock path too removes one made here.
+            try backup.capture(slot)
+            try backup.capture(stock)
             if !FileSafety.exists(stock) {
                 try fm.copyItem(at: slot, to: stock)
+                log("Kept the stock \(slot.lastPathComponent) in \(slot.deletingLastPathComponent().lastPathComponent)/ as \(stock.lastPathComponent)")
             }
             try fm.removeItem(at: slot)
             try fm.copyItem(at: build.dylib, to: slot)
             try Shell.check("/bin/chmod", ["755", slot.path], token: token)
-            written.append((slot, stock))
             relative.append(String(slot.path.dropFirst(bundle.path.count + 1)))
-            rollback = { undoAll() + (previousRollback?() ?? []) }
-            log("Installed MoltenVK “\(build.name)” into \(slot.deletingLastPathComponent().lastPathComponent)/")
+            log("Installed MoltenVK \u{201C}\(build.name)\u{201D} into \(slot.deletingLastPathComponent().lastPathComponent)/")
         }
 
-        guard !written.isEmpty else {
+        guard !relative.isEmpty else {
             throw PatchError.io("This MoltenVK build is \(build.architectures.joined(separator: ", ")) only, which does not match this CrossOver's Vulkan library. Use a build made for this CrossOver.")
         }
         try Quarantine.strip(under: bundle, token: token)

@@ -43,6 +43,7 @@ struct ToolkitTile: View {
             VStack(alignment: .leading, spacing: 3) {
                 Menu {
                     Picker("Toolkit version", selection: selection) {
+                        Text("Unchanged").tag(Toolkit?.none)
                         ForEach(engine.toolkits) { toolkit in
                             Text(toolkit.displayName).tag(Optional(toolkit))
                         }
@@ -52,7 +53,6 @@ struct ToolkitTile: View {
                     Divider()
                     Button("Add Toolkit…", action: openPanel)
                     if let toolkit = engine.selectedToolkit {
-                        Button("Leave the toolkit as it is") { engine.clearToolkit() }
                         Button("Remove \(toolkit.displayName) from Library", role: .destructive) { engine.removeToolkit(toolkit) }
                     }
                 } label: {
@@ -119,7 +119,7 @@ struct ToolkitTile: View {
     }
 
     private var selection: Binding<Toolkit?> {
-        Binding(get: { engine.selectedToolkit }, set: { if let t = $0 { engine.selectToolkit(t) } })
+        Binding(get: { engine.selectedToolkit }, set: { if let t = $0 { engine.selectToolkit(t) } else { engine.clearToolkit() } })
     }
 
     private func detail(for toolkit: Toolkit) -> String {

@@ -87,7 +87,13 @@ struct PatchedAppSettings: View {
             // Settings
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 8) {
-                    Text("D3DMetal Frame Rate Cap")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Frame Rate Cap")
+                        Text("D3DMetal and DXMT games. DXMT needs a factor of the display's refresh rate, such as 30 or 60.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Spacer()
                     if values.fpsEnabled {
                         TextField("", value: $values.fpsValue, format: .number)
@@ -101,9 +107,9 @@ struct PatchedAppSettings: View {
                         Text("Off").foregroundStyle(.secondary)
                     }
                     Toggle("", isOn: $values.fpsEnabled).toggleStyle(.switch).controlSize(.small).labelsHidden()
-                        .accessibilityLabel("D3DMetal Frame Rate Cap")
+                        .accessibilityLabel("Frame Rate Cap")
                 }
-                .frame(height: 24)
+                .frame(minHeight: 24)
 
                 HStack(spacing: 8) {
                     Text("Metal Performance HUD")
@@ -239,7 +245,9 @@ struct PatchedAppSettings: View {
     private func refreshOverrides() {
         overrides = bottles.compactMap { bottle in
             var parts: [String] = []
-            if let cap = CXConfig.value(of: "D3DM_MAX_FPS", in: bottle.conf) { parts.append("cap \(cap) fps") }
+            let cap = CXConfig.value(of: "D3DM_MAX_FPS", in: bottle.conf).flatMap(Int.init)
+                ?? DXMTConfig.frameRate(in: CXConfig.value(of: "DXMT_CONFIG", in: bottle.conf))
+            if let cap { parts.append("cap \(cap) fps") }
             if let hud = CXConfig.value(of: "MTL_HUD_ENABLED", in: bottle.conf) { parts.append("HUD \(hud == "1" ? "on" : "off")") }
             if let m4 = CXConfig.value(of: "D3DM_MTL4", in: bottle.conf) { parts.append("Metal 4 \(Metal4Mode.from(stored: m4).title.lowercased())") }
             return parts.isEmpty ? nil : "\(bottle.name) (\(parts.joined(separator: ", ")))"
@@ -315,7 +323,7 @@ struct PatchedAppSettings: View {
 
     private func write(reset: Bool = false) {
         guard !saving, !quitting else { return }
-        let changes = reset ? AppSettings.keys.map { ($0, nil as String?) } : values.changes(from: saved)
+        let changes = reset ? values.reset() : values.changes(from: saved)
         let location = app.url
         let bottleConf = scope.bottle?.conf
         saving = true
