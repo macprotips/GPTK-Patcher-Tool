@@ -45,6 +45,7 @@ struct ContentView: View {
             NSApp.activate(ignoringOtherApps: true)
             engine.refreshToolkits()
             engine.refreshDXMT()
+            engine.refreshMoltenVK()
             engine.refreshPatchedApps()
             DebugHooks.apply(to: engine)
         }
@@ -99,7 +100,11 @@ struct ContentView: View {
             }
 
             if engine.crossOverInstructions == nil && engine.compatibilityIssue == nil && !engine.isImporting {
-                DXMTRow(engine: engine).padding(.top, 8)
+                HStack(alignment: .top, spacing: 16) {
+                    DXMTRow(engine: engine)
+                    MoltenVKRow(engine: engine)
+                }
+                .padding(.top, 8)
             }
 
             if let instructions = engine.crossOverInstructions {
@@ -391,6 +396,7 @@ private struct WhatChangesPopover: View {
             bullet("Replaces the app's built-in D3DMetal with the version from the toolkit, keeping the original as apple_gptk.stock so the change can be undone. Choose \"Leave the toolkit as it is\" to skip it and update only DXMT.")
             bullet("Adds the nvngx.dll that games with DLSS look for, and turns DLSS to MetalFX on for every bottle the app launches.")
             bullet("Checks the original app's signature, then signs and verifies the modified app for local use. Its embedded libraries retain their signatures. The local copy's download metadata is cleared so macOS can open it from this location.")
+            bullet("Replaces the bundled MoltenVK, the Vulkan driver, when a build is chosen. That is what Doom, Wolfenstein and Detroit: Become Human need. Every copy the app ships is replaced, each original kept as libMoltenVK.dylib.stock, and a build is refused if it does not match the architecture CrossOver needs.")
             bullet("Replaces the bundled DXMT when a build is chosen, keeping the original as dxmt.stock. Anything a DXMT release leaves out, such as the ARM64 files CrossOver Preview ships, is carried over.")
             bullet("Leaves a receipt inside the app. That is how it appears in the Patched list, where the gear sets a frame rate cap, the Metal Performance HUD, and Metal 4.")
             bullet("Each toolkit you add is stored in ~/Library/Application Support/GPTKPatcher so you can switch between versions later.")
@@ -653,67 +659,63 @@ private struct PlannedOutputRow: View {
     }
 }
 
-/// The optional DXMT input: CrossOver bundles its own DXMT, and a release archive replaces it.
-/// Empty it is a drop target; with builds in the library it is a menu of them.
-private struct DXMTRow: View {
-    @Bindable var engine: PatchEngine
+/// One optional component: DXMT or MoltenVK. Empty it invites a file; with builds in the
+/// library it becomes a menu of them. Both sit side by side under the two main tiles.
+private struct ExtraRow<MenuItems: View>: View {
+    let label: String
+    let status: DropStatus
+    /// The chosen build's name, or nil when this component is being left alone.
+    let title: String?
+    let hasLibrary: Bool
+    let prompt: String
+    let help: String
+    let onAdd: () -> Void
+    let onClear: () -> Void
+    let onDrop: ([URL]) -> Bool
+    @ViewBuilder let menuItems: () -> MenuItems
 
     @State private var targeted = false
     @State private var hovering = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 10) {
-            SectionLabel("DXMT")
+        HStack(spacing: 8) {
+            SectionLabel(label)
             content
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
             trailing
         }
         .padding(.leading, 12)
         .padding(.trailing, 8)
         .frame(height: 38)
-        .modifier(InputTileChrome(targeted: targeted, hovering: hovering, isEmpty: chosen == nil, isError: isError))
+        .modifier(InputTileChrome(targeted: targeted, hovering: hovering, isEmpty: title == nil, isError: isError))
         .onHover { hovering = $0 }
-        .dropDestination(for: URL.self) { urls, _ in
-            var accepted = false
-            for url in urls where engine.route(url) { accepted = true }
-            return accepted
-        } isTargeted: { targeted = $0 }
+        .dropDestination(for: URL.self) { urls, _ in onDrop(urls) } isTargeted: { targeted = $0 }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: targeted)
+        .help(help)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("DXMT")
+        .accessibilityLabel(label)
     }
 
-    private var chosen: DXMTBuild? { engine.selectedDXMT }
-    private var isError: Bool { if case .failed = engine.dxmtStatus { return true } else { return false } }
+    private var isError: Bool { if case .failed = status { return true } else { return false } }
 
     @ViewBuilder
     private var content: some View {
-        switch engine.dxmtStatus {
-        case .checking(let text):
-            Text(text).foregroundStyle(.secondary)
+        switch status {
+        case .checking:
+            Text("Adding…").foregroundStyle(.secondary).lineLimit(1)
         case .failed(let text):
-            Text(text).font(.callout).foregroundStyle(.red).lineLimit(2)
+            Text(text).font(.caption).foregroundStyle(.red).lineLimit(2)
         case .empty, .ok:
-            if chosen != nil || !engine.dxmtBuilds.isEmpty {
+            if title != nil || hasLibrary {
                 Menu {
-                    Picker("DXMT version", selection: selection) {
-                        ForEach(engine.dxmtBuilds) { build in
-                            Text(build.displayName).tag(Optional(build))
-                        }
-                    }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                    Divider()
-                    Button("Add DXMT Release…", action: openPanel)
-                    if let chosen {
-                        Button("Leave DXMT as it is") { engine.clearDXMT() }
-                        Button("Remove \(chosen.displayName) from Library", role: .destructive) { engine.removeDXMT(chosen) }
-                    }
+                    menuItems()
                 } label: {
-                    HStack(spacing: 5) {
-                        Text(chosen?.displayName ?? "Not replacing DXMT")
-                            .foregroundStyle(chosen == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                    HStack(spacing: 4) {
+                        Text(title ?? "Unchanged")
+                            .foregroundStyle(title == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                         Image(systemName: "chevron.down")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(.secondary)
@@ -723,13 +725,12 @@ private struct DXMTRow: View {
                 .menuStyle(.button)
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
-                .fixedSize()
-                .accessibilityLabel("DXMT version")
-                .accessibilityValue(chosen?.displayName ?? "not replacing DXMT")
             } else {
-                Button(action: openPanel) {
-                    Text(targeted ? "Release to add" : "Drop a DXMT release here, or click to choose")
+                Button(action: onAdd) {
+                    Text(targeted ? "Release to add" : prompt)
                         .foregroundStyle(targeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -739,34 +740,55 @@ private struct DXMTRow: View {
 
     @ViewBuilder
     private var trailing: some View {
-        switch engine.dxmtStatus {
-        case .checking:
-            ProgressView().controlSize(.small)
+        switch status {
+        case .checking: ProgressView().controlSize(.small)
         case .failed:
-            Button { engine.clearDXMT() } label: {
-                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).font(.system(size: 14))
+            Button(action: onClear) {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).font(.system(size: 13))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss")
-        case .empty:
-            Text("Optional").font(.caption).foregroundStyle(.tertiary).padding(.trailing, 4)
+        case .empty: EmptyView()
         case .ok:
-            if hovering {
-                Button { engine.clearDXMT() } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).font(.system(size: 14))
-                }
-                .buttonStyle(.plain)
-                .help("Leave DXMT as it is")
-                .accessibilityLabel("Don't replace DXMT")
-            } else {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 14))
-                    .accessibilityHidden(true)
-            }
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 13))
+                .accessibilityHidden(true)
         }
     }
+}
 
-    private var selection: Binding<DXMTBuild?> {
-        Binding(get: { engine.selectedDXMT }, set: { if let b = $0 { engine.selectDXMT(b) } })
+private struct DXMTRow: View {
+    @Bindable var engine: PatchEngine
+
+    var body: some View {
+        ExtraRow(label: "DXMT",
+                 status: engine.dxmtStatus,
+                 title: engine.selectedDXMT.map { "DXMT \($0.version)" },
+                 hasLibrary: !engine.dxmtBuilds.isEmpty,
+                 prompt: "Drop a release",
+                 help: "Replaces CrossOver's DXMT, which runs DirectX 11 games. Drop a dxmt-vX.XX-builtin.tar.gz here.",
+                 onAdd: openPanel,
+                 onClear: engine.clearDXMT,
+                 onDrop: { urls in
+                     var accepted = false
+                     for url in urls where engine.route(url) { accepted = true }
+                     return accepted
+                 }) {
+            Picker("DXMT version", selection: Binding(
+                get: { engine.selectedDXMT },
+                set: { if let build = $0 { engine.selectDXMT(build) } })) {
+                    ForEach(engine.dxmtBuilds) { build in
+                        Text(build.displayName).tag(Optional(build))
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            Divider()
+            Button("Add DXMT Release…", action: openPanel)
+            if let build = engine.selectedDXMT {
+                Button("Leave DXMT as it is") { engine.clearDXMT() }
+                Button("Remove \(build.displayName) from Library", role: .destructive) { engine.removeDXMT(build) }
+            }
+        }
     }
 
     private func openPanel() {
@@ -776,10 +798,61 @@ private struct DXMTRow: View {
         panel.message = "Choose a DXMT release archive"
         if panel.runModal() == .OK, let url = panel.url {
             guard DXMTLibrary.looksLikeArchive(url) else {
-                engine.dxmtStatus = .failed("That isn't a DXMT release archive. Pick the dxmt-vX.XX-builtin.tar.gz from the releases page.")
+                engine.dxmtStatus = .failed("Not a DXMT release archive (.tar.gz).")
                 return
             }
             engine.importDXMT(from: url)
+        }
+    }
+}
+
+private struct MoltenVKRow: View {
+    @Bindable var engine: PatchEngine
+
+    var body: some View {
+        ExtraRow(label: "MoltenVK",
+                 status: engine.moltenVKStatus,
+                 title: engine.selectedMoltenVK?.displayName,
+                 hasLibrary: !engine.moltenVKBuilds.isEmpty,
+                 prompt: "Drop a build",
+                 help: "Replaces CrossOver's Vulkan driver, which runs Doom, Wolfenstein and Detroit: Become Human. Drop a libMoltenVK.dylib, or the .zip it came in.",
+                 onAdd: openPanel,
+                 onClear: engine.clearMoltenVK,
+                 onDrop: { urls in
+                     var accepted = false
+                     for url in urls where engine.route(url) { accepted = true }
+                     return accepted
+                 }) {
+            Picker("MoltenVK build", selection: Binding(
+                get: { engine.selectedMoltenVK },
+                set: { if let build = $0 { engine.selectMoltenVK(build) } })) {
+                    ForEach(engine.moltenVKBuilds) { build in
+                        Text(build.displayName).tag(Optional(build))
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            Divider()
+            Button("Add MoltenVK Build…", action: openPanel)
+            if let build = engine.selectedMoltenVK {
+                Text(build.detail)
+                Button("Leave MoltenVK as it is") { engine.clearMoltenVK() }
+                Button("Remove \(build.displayName) from Library", role: .destructive) { engine.removeMoltenVK(build) }
+            }
+        }
+    }
+
+    private func openPanel() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose a MoltenVK build (libMoltenVK.dylib, or the archive it came in)"
+        if panel.runModal() == .OK, let url = panel.url {
+            guard MoltenVKLibrary.looksLikeBuild(url) else {
+                engine.moltenVKStatus = .failed("Not a MoltenVK build (.dylib or archive).")
+                return
+            }
+            engine.importMoltenVK(from: url)
         }
     }
 }

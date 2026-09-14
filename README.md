@@ -12,6 +12,8 @@ DLSS → MetalFX.
   redistributed here; you supply your own copy.
 - Optional, to update DXMT: a release archive (`dxmt-vX.XX-builtin.tar.gz`) from
   [3Shain/dxmt](https://github.com/3Shain/dxmt/releases).
+- Optional, to update MoltenVK: a `libMoltenVK.dylib`, or the archive it came in. See
+  [Vulkan games](#vulkan-games-doom-wolfenstein-detroit) below.
 
 ## Development
 
@@ -64,7 +66,7 @@ notarization, with credentials configured as described at the top of that script
    Files can also be dropped on the app icon, pasted with ⌘V, or picked with a file chooser. The
    full `Game_Porting_Toolkit_x.dmg` works directly; the evaluation-environment image inside it is
    found automatically.
-3. Optionally drop a DXMT release archive on the **DXMT** line to update DXMT in the same pass.
+3. Optionally drop a build on the **DXMT** or **MoltenVK** line to update DXMT in the same pass.
    Left alone, CrossOver's own DXMT is untouched; the menu's *Leave DXMT as it is* puts it back
    to untouched. Either component can be skipped: choose *Leave the toolkit as it is* on the
    toolkit tile to update only DXMT. One of the two has to be chosen.
@@ -113,6 +115,12 @@ do not need to be changed.
   recovery is reported with the retained backup location in **Details**.
 - Skips the toolkit entirely when none is chosen, so a patch can update DXMT alone. The
   bundled `apple_gptk` is then left exactly as it was, with no backup made of it.
+- Replaces every `libMoltenVK.dylib` the app ships when a MoltenVK build is chosen, keeping each
+  original as `libMoltenVK.dylib.stock`. CrossOver 26 has one in `lib64`; CrossOver Preview has one
+  per architecture. A build is refused rather than installed if it does not contain the
+  architecture a slot needs, since a mismatch breaks Vulkan with no visible cause. Choosing a build
+  also sets `MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM` and
+  `MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION`, which the Detroit build needs for its cache.
 - Replaces `lib/dxmt` when a DXMT build is chosen, keeping the original as `dxmt.stock`.
   Upstream releases ship x86_64 and i386 only, so anything else the bundled build had is
   carried over — CrossOver Preview's `aarch64` DXMT survives the swap.
@@ -128,6 +136,29 @@ do not need to be changed.
   identity; the result is not a CodeWeavers-signed or notarized distribution. CrossOver is not
   automatically launched during patching.
 - Leaves `gptkpatcher-receipt.json` in the app's SharedSupport folder.
+
+## Vulkan games (Doom, Wolfenstein, Detroit)
+
+Doom, Wolfenstein and Detroit: Become Human are Vulkan games, so neither the Game Porting Toolkit
+nor DXMT affects them — they go through **MoltenVK**, which CrossOver also bundles. Community
+builds of MoltenVK fix each of them, and this app installs one for you.
+
+Builds are not distributed here. Two that exist today:
+
+- **Doom 2016 / Doom Eternal**: `libMoltenVK-experimental.dylib` from
+  [Procyon](https://github.com/italomandara/Procyon/tree/main/Procyon/Libs). Reported to work for
+  Wolfenstein: The New Colossus as well.
+- **Detroit: Become Human**: [MoltenVK-Detroit](https://github.com/DiAvisoo/MoltenVK-Detroit/releases).
+  Drop the downloaded `.zip` straight in; there is no need to unpack it.
+
+Builds are game-specific. They make Metal report features it does not really have, which helps one
+game and can upset another, so keep one per game and switch between them rather than looking for a
+single build that does everything.
+
+**Detroit needs more than this app does.** After patching, it still needs its own game fixes: set
+`"DEPTH_OF_FIELD": 0` in `GraphicOptions.JSON`, a one-byte edit to `DetroitBecomeHuman.exe`, and a
+first-run Metal shader cache build that requires the full Xcode. Follow the MoltenVK-Detroit
+instructions for those. Doom and Wolfenstein generally need only the build swapped in.
 
 ## Compatibility
 
