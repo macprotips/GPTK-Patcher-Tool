@@ -224,6 +224,8 @@ final class StabilityTests: XCTestCase {
         let patched = try CrossOverBundle(url: result)
         XCTAssertEqual(CXConfig.value(of: "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM", in: patched.globalConfig), "3")
         XCTAssertEqual(CXConfig.value(of: "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION", in: patched.globalConfig), "1")
+        // Metal allows 16 sampler slots without argument buffers; these games need more.
+        XCTAssertEqual(CXConfig.value(of: "MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", in: patched.globalConfig), "1")
         // The source app was not touched: no backup was made beside its own slots.
         for slot in mvkSlots(app.url) {
             XCTAssertFalse(fm.fileExists(atPath: slot.appendingPathExtension("stock").path), slot.path)
