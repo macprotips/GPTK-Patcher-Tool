@@ -40,7 +40,7 @@ struct FileTile: View {
         .overlay(alignment: .topTrailing) { badge.padding(10) }
         .onHover { hovering = $0 }
         .dropDestination(for: URL.self) { urls, _ in
-            let accepted = urls.filter { ["app", "dmg"].contains($0.pathExtension.lowercased()) }
+            let accepted = urls.filter { ["app", "dmg"].contains($0.pathExtension.lowercased()) || DXMTLibrary.looksLikeArchive($0) }
             for url in accepted { onPick(url) }
             return !accepted.isEmpty
         } isTargeted: { targeted = $0 }

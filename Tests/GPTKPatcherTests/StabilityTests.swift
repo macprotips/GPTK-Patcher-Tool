@@ -50,15 +50,29 @@ final class StabilityTests: XCTestCase {
         try fm.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: app.appendingPathComponent("Contents/MacOS/Stub"))
         try payload(at: app.appendingPathComponent("Contents/SharedSupport/CrossOver/lib64/apple_gptk"), version: "3.0")
         _ = try write("[EnvironmentVariables]\n\"UNRELATED\" = \"keep\"\n", "CrossOver.app/Contents/SharedSupport/CrossOver/etc/CrossOver.conf")
+        // CrossOver Preview ships aarch64 DXMT that upstream releases leave out.
+        _ = try write("stock-x86", "CrossOver.app/Contents/SharedSupport/CrossOver/lib/dxmt/x86_64-windows/d3d11.dll")
+        _ = try write("stock-arm", "CrossOver.app/Contents/SharedSupport/CrossOver/lib/dxmt/aarch64-windows/d3d11.dll")
         try Shell.check("/usr/bin/codesign", ["--force", "--sign", "-", app.path])
         let lib = root.appendingPathComponent("toolkit")
         try payload(at: lib, version: "4.0b2")
         return (try CrossOverBundle(url: app), Toolkit(version: "4.0b2", lib: lib, importedAt: Date(), minimumOS: "14.0", sourceName: "test.dmg"))
     }
 
+    /// A library build holding only the architectures upstream DXMT actually ships.
+    private func dxmtBuild(_ version: String) throws -> DXMTBuild {
+        let path = root.appendingPathComponent("dxmt-\(version)")
+        _ = try write("build-\(version)", "dxmt-\(version)/x86_64-windows/d3d11.dll")
+        return DXMTBuild(version: version, path: path, importedAt: Date(), sourceName: "dxmt-v\(version).tar.gz")
+    }
+
+    private func dxmtDir(_ app: URL) -> URL {
+        app.appendingPathComponent("Contents/SharedSupport/CrossOver/lib/dxmt")
+    }
+
     private func request(_ app: CrossOverBundle, _ kit: Toolkit, mode: PatchMode = .copy,
-                         bottles: [BottleEnv.Bottle] = []) -> PatchRequest {
-        PatchRequest(crossOver: app, toolkit: kit, mode: mode, destination: root.appendingPathComponent("Patched.app"),
+                         dxmt: DXMTBuild? = nil, bottles: [BottleEnv.Bottle] = []) -> PatchRequest {
+        PatchRequest(crossOver: app, toolkit: kit, dxmt: dxmt, mode: mode, destination: root.appendingPathComponent("Patched.app"),
                      applicationsFolder: root.appendingPathComponent("Applications"), replaceExisting: false,
                      graphics: GraphicsSettings(fpsCap: 120, metalHUD: true), bottles: bottles)
     }
@@ -154,6 +168,35 @@ final class StabilityTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: job.destination.path))
         XCTAssertEqual(try Data(contentsOf: app.globalConfig), before)
         XCTAssertFalse(fm.fileExists(atPath: try app.gptkDirectory().appendingPathExtension("stock").path))
+        try assertSigned(app.url)
+    }
+
+    func testDXMTSwapKeepsStockAndTheArchesTheReleaseOmits() throws {
+        let (app, kit) = try fixture()
+        let result = try PatchJob(request: request(app, kit, dxmt: try dxmtBuild("0.80")), log: { _ in }).run()
+        try assertSigned(result)
+        let dxmt = dxmtDir(result)
+        // The release's architecture is replaced...
+        XCTAssertEqual(try Data(contentsOf: dxmt.appendingPathComponent("x86_64-windows/d3d11.dll")), Data("build-0.80".utf8))
+        // ...and the one it does not ship is carried over rather than lost.
+        XCTAssertEqual(try Data(contentsOf: dxmt.appendingPathComponent("aarch64-windows/d3d11.dll")), Data("stock-arm".utf8))
+        let stock = dxmtDir(result).deletingLastPathComponent().appendingPathComponent("dxmt.stock")
+        XCTAssertEqual(try Data(contentsOf: stock.appendingPathComponent("x86_64-windows/d3d11.dll")), Data("stock-x86".utf8))
+        XCTAssertFalse(fm.fileExists(atPath: dxmt.appendingPathComponent(DXMTLibrary.manifestName).path))
+        // The source app keeps its own DXMT.
+        XCTAssertEqual(try Data(contentsOf: dxmtDir(app.url).appendingPathComponent("x86_64-windows/d3d11.dll")), Data("stock-x86".utf8))
+    }
+
+    func testCancellationAfterDXMTSwapRestoresTheOriginalDXMT() throws {
+        let (app, kit) = try fixture()
+        let token = CancellationToken()
+        XCTAssertThrowsError(try PatchJob(request: request(app, kit, mode: .inPlace, dxmt: try dxmtBuild("0.80")),
+                                          log: { _ in },
+                                          onStep: { if $0 == .signing { token.cancel() } }, token: token).run())
+        let dxmt = dxmtDir(app.url)
+        XCTAssertEqual(try Data(contentsOf: dxmt.appendingPathComponent("x86_64-windows/d3d11.dll")), Data("stock-x86".utf8))
+        XCTAssertEqual(try Data(contentsOf: dxmt.appendingPathComponent("aarch64-windows/d3d11.dll")), Data("stock-arm".utf8))
+        XCTAssertFalse(fm.fileExists(atPath: dxmt.deletingLastPathComponent().appendingPathComponent("dxmt.stock").path))
         try assertSigned(app.url)
     }
 

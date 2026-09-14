@@ -52,7 +52,7 @@ struct GPTKPatcherApp: App {
 }
 
 /// `GPTKPatcher --cli --quit-bottle <name>` ends everything running in that bottle; `--bottle-status <name>` only lists it.
-/// `GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version> [destination.app] [--in-place] [--replace] [--fps N] [--hud] [--no-copy-env] [--bottle NAME]...`
+/// `GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version> [destination.app] [--in-place] [--replace] [--fps N] [--hud] [--dxmt ARCHIVE|VERSION] [--no-copy-env] [--bottle NAME]...`
 /// Runs the same job without the window, for scripting and testing.
 enum HeadlessRunner {
     private static func quitBottleAndExit(named name: String, dryRun: Bool) -> Never {
@@ -104,6 +104,7 @@ enum HeadlessRunner {
         var fps: Int? = nil
         var storeInCopy = true
         var bottleNames: [String] = []
+        var dxmtArg: String?
         var positional: [String] = []
         var i = 0
         while i < args.count {
@@ -116,6 +117,10 @@ enum HeadlessRunner {
                 i += 1
                 guard i < args.count, let value = Int(args[i]), value > 0 else { fail("--fps needs a whole number of frames per second", status: 64) }
                 fps = value
+            case "--dxmt":
+                i += 1
+                guard i < args.count else { fail("--dxmt needs a .tar.gz archive or an imported version", status: 64) }
+                dxmtArg = args[i]
             case "--bottle":
                 i += 1
                 guard i < args.count else { fail("--bottle needs a bottle name", status: 64) }
@@ -162,8 +167,21 @@ enum HeadlessRunner {
             let applications = FileManager.default.isWritableFile(atPath: "/Applications")
                 ? URL(fileURLWithPath: "/Applications", isDirectory: true)
                 : FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications")
+            var dxmt: DXMTBuild?
+            if let dxmtArg {
+                if DXMTLibrary.looksLikeArchive(URL(fileURLWithPath: dxmtArg)) {
+                    dxmt = try DXMTLibrary.importArchive(URL(fileURLWithPath: dxmtArg), token: token) { print($0) }
+                } else if FileManager.default.fileExists(atPath: dxmtArg) {
+                    throw PatchError.io("\(dxmtArg) isn't a DXMT release archive. Pass the dxmt-vX.XX-builtin.tar.gz from the DXMT releases page.")
+                } else if let stored = DXMTLibrary.list().first(where: { $0.version == dxmtArg || $0.displayName == dxmtArg }) {
+                    dxmt = stored
+                } else {
+                    let known = DXMTLibrary.list().map(\.version).joined(separator: ", ")
+                    throw PatchError.io("No DXMT build named \(dxmtArg) in the library\(known.isEmpty ? "" : " (have: \(known))"). Pass a .tar.gz to import one.")
+                }
+            }
             let request = PatchRequest(
-                crossOver: crossOver, toolkit: toolkit, mode: inPlace ? .inPlace : .copy,
+                crossOver: crossOver, toolkit: toolkit, dxmt: dxmt, mode: inPlace ? .inPlace : .copy,
                 destination: URL(fileURLWithPath: inPlace ? positional[0] : positional[2]),
                 applicationsFolder: applications,
                 replaceExisting: replace,
