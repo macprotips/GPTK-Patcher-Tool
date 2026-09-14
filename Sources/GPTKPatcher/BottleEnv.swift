@@ -310,6 +310,37 @@ enum Metal4Mode: String, CaseIterable, Identifiable {
 }
 
 /// The D3DMetal switches this app manages. Each maps to one environment variable.
+/// DXMT keeps its own options in one string: `"d3d11.preferredMaxFrameRate=60;dxgi.forceSDR=True"`,
+/// read from the DXMT_CONFIG environment variable. Its frame limiter is separate from D3DMetal's.
+enum DXMTConfig {
+    static let frameRateKey = "d3d11.preferredMaxFrameRate"
+
+    private static func entries(_ value: String?) -> [String] {
+        (value ?? "").split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    static func key(_ entry: String) -> String { key(of: entry) }
+
+    private static func key(of entry: String) -> String {
+        String(entry.prefix(while: { $0 != "=" })).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Every option except the frame limiter, so anything else set here survives a change.
+    static func otherOptions(in value: String?) -> [String] {
+        entries(value).filter { key(of: $0).caseInsensitiveCompare(frameRateKey) != .orderedSame }
+    }
+
+    static func frameRate(in value: String?) -> Int? {
+        entries(value).first { key(of: $0).caseInsensitiveCompare(frameRateKey) == .orderedSame }
+            .flatMap { Int($0.drop(while: { $0 != "=" }).dropFirst().trimmingCharacters(in: .whitespaces)) }
+    }
+
+    /// 0 is DXMT's own default and means no limit.
+    static func string(keeping others: [String], frameRate: Int) -> String {
+        (others + ["\(frameRateKey)=\(frameRate)"]).joined(separator: ";")
+    }
+}
+
 struct GraphicsSettings: Sendable, Equatable {
     var fpsCap: Int? = nil
     var metalHUD = false
@@ -341,6 +372,12 @@ struct GraphicsSettings: Sendable, Equatable {
     /// Writes the settings into one config file and reports what changed. Existing values for
     /// switches this request doesn't set (a cap set earlier from the options popover) are kept.
     func apply(to conf: URL) throws -> [String] {
-        try CXConfig.apply(assignments.filter { $0.value != nil }, to: conf)
+        var list = assignments.filter { $0.value != nil }
+        // The cap covers both translation layers; DXMT games ignore D3DMetal's.
+        if let fpsCap {
+            let others = DXMTConfig.otherOptions(in: CXConfig.value(of: "DXMT_CONFIG", in: conf))
+            list.append(("DXMT_CONFIG", DXMTConfig.string(keeping: others, frameRate: fpsCap)))
+        }
+        return try CXConfig.apply(list, to: conf)
     }
 }

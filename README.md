@@ -67,9 +67,9 @@ notarization, with credentials configured as described at the top of that script
    full `Game_Porting_Toolkit_x.dmg` works directly; the evaluation-environment image inside it is
    found automatically.
 3. Optionally drop a build on the **DXMT** or **MoltenVK** line to update DXMT in the same pass.
-   Left alone, CrossOver's own DXMT is untouched; the menu's *Leave DXMT as it is* puts it back
-   to untouched. Either component can be skipped: choose *Leave the toolkit as it is* on the
-   toolkit tile to update only DXMT. One of the two has to be chosen.
+   Left alone, CrossOver's own DXMT and MoltenVK are untouched. Every menu lists *Unchanged*
+   alongside the imported builds, so any component can be set back to untouched — including the
+   toolkit, to update only DXMT. At least one has to be chosen.
 4. Choose **Duplicate CrossOver** or **Patch Existing**.
 5. Click **Patch CrossOver**.
 
@@ -83,7 +83,10 @@ Imported toolkits are kept in `~/Library/Application Support/GPTKPatcher/Toolkit
 DXMT builds in `.../GPTKPatcher/DXMT/<version>/`, each picked from its own menu.
 
 Patched apps appear in the **Patched** list. *Reveal in Finder* shows the app; the gear sets the
-D3DMetal frame rate cap, the Metal Performance HUD and Metal 4. **App defaults** apply to bottles
+frame rate cap, the Metal Performance HUD and Metal 4. One cap covers both translation layers: it
+writes `D3DM_MAX_FPS` for D3DMetal games and `d3d11.preferredMaxFrameRate` in `DXMT_CONFIG` for
+DXMT games, keeping any other DXMT option already set there. DXMT wants a factor of the display's
+refresh rate, such as 30 or 60 on a 120 Hz display. **App defaults** apply to bottles
 launched with that copy; individual bottle settings take priority. Bottle options show inherited
 cap/HUD values, and **Off** explicitly disables them. **Use App Defaults** removes that bottle's
 three overrides. Changing app defaults preserves existing bottle overrides. Quit that CrossOver
@@ -114,7 +117,9 @@ do not need to be changed.
   receipt, configs and signature are restored and an unfinished duplicate is deleted. Failed
   recovery is reported with the retained backup location in **Details**.
 - Skips the toolkit entirely when none is chosen, so a patch can update DXMT alone. The
-  bundled `apple_gptk` is then left exactly as it was, with no backup made of it.
+  bundled `apple_gptk` is then left exactly as it was, with no backup made of it. Whatever an
+  earlier patch put in the app stays recorded, so a toolkit-only or DXMT-only pass does not make
+  the app forget the rest of what it carries.
 - Replaces every `libMoltenVK.dylib` the app ships when a MoltenVK build is chosen, keeping each
   original as `libMoltenVK.dylib.stock`. CrossOver 26 has one in `lib64`; CrossOver Preview has one
   per architecture. A build is refused rather than installed if it does not contain the
@@ -124,6 +129,8 @@ do not need to be changed.
 - Replaces `lib/dxmt` when a DXMT build is chosen, keeping the original as `dxmt.stock`.
   Upstream releases ship x86_64 and i386 only, so anything else the bundled build had is
   carried over — CrossOver Preview's `aarch64` DXMT survives the swap.
+- Leaves DXMT or MoltenVK untouched when the app already carries the build that is chosen, so
+  re-patching an app to update only its toolkit does not disturb them.
 - Creates `nvngx.dll` and `nvngx.so` copies of the toolkit's `nvngx-on-metalfx` shim. CrossOver's
   loader redirects a game's `nvngx.dll` to that file; without it DLSS games get no MetalFX.
 - Writes `D3DM_ENABLE_METALFX=1` and `DXMT_ENABLE_NVEXT=1` to the app's

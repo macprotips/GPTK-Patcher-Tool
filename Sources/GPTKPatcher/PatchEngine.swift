@@ -43,6 +43,9 @@ final class PatchEngine {
     var selectedMoltenVK: MoltenVKBuild?
     var importingMoltenVK: URL?
     var moltenVKStatus: DropStatus = .empty
+    /// The Advanced disclosure, kept here so it stays open across view rebuilds and opens itself
+    /// when one of the settings it holds is already in use.
+    var showsAdvanced = false
 
     var dxmtBuilds: [DXMTBuild] = []
     var selectedDXMT: DXMTBuild?
@@ -102,7 +105,9 @@ final class PatchEngine {
 
     /// The name the copy will get. Never replaces anything: if the name is taken, a counter is added.
     var outputName: String {
-        let component = gptkVersion.map { "GPTK \($0)" } ?? selectedDXMT.map { "DXMT \($0.version)" } ?? "GPTK …"
+        let component = gptkVersion.map { "GPTK \($0)" }
+            ?? selectedDXMT.map { "DXMT \($0.version)" }
+            ?? (selectedMoltenVK != nil ? "MoltenVK" : "GPTK …")
         let base = "\(crossOver?.name ?? "CrossOver") (\(component))"
         var candidate = base + ".app"
         var n = 2
@@ -319,6 +324,7 @@ final class PatchEngine {
 
     func refreshMoltenVK() {
         moltenVKBuilds = MoltenVKLibrary.list()
+        if selectedMoltenVK != nil { showsAdvanced = true }
         if let selected = selectedMoltenVK, let match = moltenVKBuilds.first(where: { $0.name == selected.name }) {
             selectedMoltenVK = match
         } else if selectedMoltenVK != nil {
@@ -328,6 +334,7 @@ final class PatchEngine {
     }
 
     func selectMoltenVK(_ build: MoltenVKBuild) {
+        showsAdvanced = true
         selectedMoltenVK = build
         moltenVKStatus = .ok(build.name)
     }
@@ -371,7 +378,7 @@ final class PatchEngine {
     // MARK: Patching
 
     func patch() {
-        guard let crossOver, let toolkit = selectedToolkit, isReady else { return }
+        guard let crossOver, isReady else { return }
         if mode == .inPlace {
             let running = NSRunningApplication.runningApplications(withBundleIdentifier: crossOver.identifier)
             // A never-opened download runs from a hidden translocated copy, whose path differs.

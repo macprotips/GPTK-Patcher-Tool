@@ -72,8 +72,23 @@ final class StabilityTests: XCTestCase {
         return DXMTBuild(version: version, path: path, importedAt: Date(), sourceName: "dxmt-v\(version).tar.gz")
     }
 
+    private func payloadLib(_ version: String) throws -> URL {
+        let lib = root.appendingPathComponent("toolkit-\(version)")
+        try payload(at: lib, version: version)
+        return lib
+    }
+
     private func dxmtDir(_ app: URL) -> URL {
         app.appendingPathComponent("Contents/SharedSupport/CrossOver/lib/dxmt")
+    }
+
+    /// A second stored build, told apart from the first by name and contents.
+    private func moltenVKBuild(named name: String, binary: String) throws -> MoltenVKBuild {
+        let source = root.appendingPathComponent("\(name)/libMoltenVK.dylib")
+        try fm.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if FileSafety.exists(source) { try fm.removeItem(at: source) }
+        try fm.copyItem(at: URL(fileURLWithPath: binary), to: source)
+        return try MoltenVKLibrary.importBuild(source, directory: root.appendingPathComponent("mvk-library")) { _ in }
     }
 
     /// A stored MoltenVK build made from a real Mach-O, optionally narrowed to one architecture.
@@ -245,6 +260,45 @@ final class StabilityTests: XCTestCase {
         try assertSigned(app.url)
     }
 
+    func testAFailedSwapKeepsTheMoltenVKBuildThatWasAlreadyThere() throws {
+        let (app, kit) = try fixture()
+        let first = try moltenVKBuild(named: "doom-build", binary: "/usr/bin/true")
+        let patched = try PatchJob(request: request(app, kit, moltenVK: first), log: { _ in }).run()
+        let installed = try mvkSlots(patched).map { try Data(contentsOf: $0) }
+        let stocks = try mvkSlots(patched).map { try Data(contentsOf: $0.appendingPathExtension("stock")) }
+
+        // Swapping in a different build fails at the last step.
+        let second = try moltenVKBuild(named: "detroit-build", binary: "/bin/echo")
+        let token = CancellationToken()
+        XCTAssertThrowsError(try PatchJob(request: request(CrossOverBundle(url: patched), kit, mode: .inPlace, moltenVK: second),
+                                          log: { _ in },
+                                          onStep: { if $0 == .signing { token.cancel() } }, token: token).run())
+        // The build that was working is back — not the stock library — and the stock is still kept.
+        for (index, slot) in mvkSlots(patched).enumerated() {
+            XCTAssertEqual(try Data(contentsOf: slot), installed[index], slot.path)
+            XCTAssertEqual(try Data(contentsOf: slot.appendingPathExtension("stock")), stocks[index], slot.path)
+            XCTAssertFalse(fm.fileExists(atPath: slot.appendingPathExtension("previous").path))
+        }
+        try assertSigned(patched)
+    }
+
+    func testAFailedSwapKeepsTheDXMTBuildThatWasAlreadyThere() throws {
+        let (app, kit) = try fixture()
+        let patched = try PatchJob(request: request(app, kit, dxmt: try dxmtBuild("0.80")), log: { _ in }).run()
+        let dll = dxmtDir(patched).appendingPathComponent("x86_64-windows/d3d11.dll")
+        let token = CancellationToken()
+        XCTAssertThrowsError(try PatchJob(request: request(CrossOverBundle(url: patched), kit, mode: .inPlace,
+                                                           dxmt: try dxmtBuild("0.81")),
+                                          log: { _ in },
+                                          onStep: { if $0 == .signing { token.cancel() } }, token: token).run())
+        XCTAssertEqual(try Data(contentsOf: dll), Data("build-0.80".utf8))
+        let stock = dxmtDir(patched).deletingLastPathComponent().appendingPathComponent("dxmt.stock")
+        XCTAssertEqual(try Data(contentsOf: stock.appendingPathComponent("x86_64-windows/d3d11.dll")), Data("stock-x86".utf8))
+        XCTAssertFalse(fm.fileExists(atPath: dxmtDir(patched).deletingLastPathComponent()
+            .appendingPathComponent(".dxmt.previous").path))
+        try assertSigned(patched)
+    }
+
     func testDXMTAloneLeavesTheToolkitUntouched() throws {
         let (app, _) = try fixture()
         let result = try PatchJob(request: request(app, nil, dxmt: try dxmtBuild("0.80")), log: { _ in }).run()
@@ -295,6 +349,71 @@ final class StabilityTests: XCTestCase {
         try assertSigned(app.url)
     }
 
+    func testAPatchThatSkipsTheToolkitKeepsWhatTheAppAlreadyCarries() throws {
+        let (app, kit) = try fixture()
+        let first = try PatchJob(request: request(app, kit, moltenVK: try moltenVKBuild()), log: { _ in }).run()
+
+        // DXMT only, on an app that already has a patched toolkit and a MoltenVK build.
+        let result = try PatchJob(request: request(CrossOverBundle(url: first), nil, mode: .inPlace,
+                                                   dxmt: try dxmtBuild("0.80")), log: { _ in }).run()
+        try assertSigned(result)
+        // The toolkit is still in there, so the name and the receipt still say so.
+        XCTAssertEqual(result.lastPathComponent, "CrossOver (GPTK 4.0b2).app")
+        XCTAssertEqual(try CrossOverBundle(url: result).installedD3DMetalVersion, "4.0b2")
+        XCTAssertTrue(try CrossOverBundle(url: result).hasPatchBackup, "the app must still be repairable")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: try Data(contentsOf: result.appendingPathComponent(PatchedAppRegistry.receiptPath))) as? [String: Any])
+        XCTAssertEqual(json["gptkD3DMetalVersion"] as? String, "4.0b2")
+        XCTAssertEqual(json["stockD3DMetalVersion"] as? String, "3.0")
+        XCTAssertNotNil(json["stockBackup"])
+        XCTAssertEqual((json["dlssAliases"] as? [String])?.isEmpty, false)
+        XCTAssertEqual(json["dxmtVersion"] as? String, "0.80")
+        XCTAssertNotNil(json["moltenVKBuild"])
+    }
+
+    func testRepatchWithTheSameExtrasLeavesThemUntouched() throws {
+        let (app, kit) = try fixture()
+        let dxmt = try dxmtBuild("0.80")
+        let mvk = try moltenVKBuild()
+        let first = try PatchJob(request: request(app, kit, dxmt: dxmt, moltenVK: mvk), log: { _ in }).run()
+
+        // Only the toolkit changes; DXMT and MoltenVK are the builds already in there.
+        let newer = Toolkit(version: "4.1", lib: try payloadLib("4.1"), importedAt: Date(),
+                            minimumOS: "14.0", sourceName: "newer.dmg")
+        var lines: [String] = []
+        let result = try PatchJob(request: request(CrossOverBundle(url: first), newer, mode: .inPlace,
+                                                   dxmt: dxmt, moltenVK: mvk), log: { lines.append($0) }).run()
+        try assertSigned(result)
+        XCTAssertEqual(D3DMetalInfo.read(inLib: try CrossOverBundle(url: result).gptkDirectory()).version, "4.1")
+        XCTAssertTrue(lines.contains { $0.contains("DXMT 0.80 is already installed") }, lines.joined(separator: "\n"))
+        XCTAssertTrue(lines.contains { $0.contains("is already installed") && $0.contains(mvk.name) }, lines.joined(separator: "\n"))
+        XCTAssertFalse(fm.fileExists(atPath: dxmtDir(result).deletingLastPathComponent()
+            .appendingPathComponent(".dxmt.previous").path))
+        // Both are still in place, and the receipt still records them.
+        XCTAssertEqual(try Data(contentsOf: dxmtDir(result).appendingPathComponent("x86_64-windows/d3d11.dll")),
+                       Data("build-0.80".utf8))
+        for slot in mvkSlots(result) {
+            XCTAssertTrue(fm.fileExists(atPath: slot.appendingPathExtension("stock").path))
+        }
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: try Data(contentsOf: result.appendingPathComponent(PatchedAppRegistry.receiptPath))) as? [String: Any])
+        XCTAssertEqual(json["dxmtVersion"] as? String, "0.80")
+        XCTAssertEqual(json["moltenVKBuild"] as? String, mvk.name)
+        XCTAssertEqual((json["moltenVKSlots"] as? [String])?.count, 2)
+    }
+
+    func testRepatchWithADifferentDXMTStillSwapsIt() throws {
+        let (app, kit) = try fixture()
+        let first = try PatchJob(request: request(app, kit, dxmt: try dxmtBuild("0.80")), log: { _ in }).run()
+        let result = try PatchJob(request: request(CrossOverBundle(url: first), kit, mode: .inPlace,
+                                                   dxmt: try dxmtBuild("0.81")), log: { _ in }).run()
+        XCTAssertEqual(try Data(contentsOf: dxmtDir(result).appendingPathComponent("x86_64-windows/d3d11.dll")),
+                       Data("build-0.81".utf8))
+        // The stock kept by the first patch is still the CrossOver original, not the 0.80 build.
+        let stock = dxmtDir(result).deletingLastPathComponent().appendingPathComponent("dxmt.stock")
+        XCTAssertEqual(try Data(contentsOf: stock.appendingPathComponent("x86_64-windows/d3d11.dll")), Data("stock-x86".utf8))
+    }
+
     func testRepatchPreservesStockAndRelocatableReceipt() throws {
         let (app, kit) = try fixture()
         let first = try PatchJob(request: request(app, kit), log: { _ in }).run()
@@ -313,6 +432,61 @@ final class StabilityTests: XCTestCase {
         try assertSigned(app.url)
         XCTAssertEqual(app.installedD3DMetalVersion, "3.0")
         XCTAssertFalse(fm.fileExists(atPath: app.url.appendingPathComponent(PatchedAppRegistry.receiptPath).path))
+    }
+
+    func testFrameRateCapCoversDXMTAndKeepsItsOtherOptions() throws {
+        let (app, kit) = try fixture()
+        // A DXMT option someone set by hand, which must survive a cap change.
+        let conf = try write("[EnvironmentVariables]\n\"DXMT_CONFIG\" = \"dxgi.forceSDR=True\"\n", "bottle/cxbottle.conf")
+        let bottle = BottleEnv.Bottle(name: "Fixture", conf: conf)
+        _ = try PatchJob(request: request(app, kit, bottles: [bottle]), log: { _ in }).run()
+        XCTAssertEqual(CXConfig.value(of: "D3DM_MAX_FPS", in: conf), "120")
+        XCTAssertEqual(CXConfig.value(of: "DXMT_CONFIG", in: conf), "dxgi.forceSDR=True;d3d11.preferredMaxFrameRate=120")
+
+        // Reading it back offers one cap, and turning it off zeroes both limiters.
+        var options = GraphicsOptions.load(from: conf)
+        XCTAssertTrue(options.fpsEnabled)
+        XCTAssertEqual(options.fpsValue, 120)
+        let saved = options
+        options.fpsEnabled = false
+        try CXConfig.apply(options.changes(from: saved), to: conf)
+        XCTAssertEqual(CXConfig.value(of: "D3DM_MAX_FPS", in: conf), "0")
+        XCTAssertEqual(CXConfig.value(of: "DXMT_CONFIG", in: conf), "dxgi.forceSDR=True;d3d11.preferredMaxFrameRate=0")
+        XCTAssertFalse(GraphicsOptions.load(from: conf).fpsEnabled)
+    }
+
+    func testResetKeepsDXMTOptionsThisAppDidNotSet() throws {
+        let app = try write("[EnvironmentVariables]\n\"DXMT_CONFIG\" = \"d3d11.metalSpatialUpscaleFactor=1.5\"\n", "defaults/CrossOver.conf")
+        let bottle = try write("[EnvironmentVariables]\n\"DXMT_CONFIG\" = \"dxgi.forceSDR=True;d3d11.preferredMaxFrameRate=60\"\n\"D3DM_MAX_FPS\" = \"60\"\n", "reset/cxbottle.conf")
+        let options = GraphicsOptions.load(from: bottle, inheriting: app)
+        XCTAssertEqual(options.dxmtOptions, ["dxgi.forceSDR=True"])
+        XCTAssertEqual(options.inheritedDXMTOptions, ["d3d11.metalSpatialUpscaleFactor=1.5"])
+
+        try CXConfig.apply(options.reset(), to: bottle)
+        // The cap and the other keys this app owns are gone; the hand-set DXMT option stays.
+        XCTAssertNil(CXConfig.value(of: "D3DM_MAX_FPS", in: bottle))
+        XCTAssertEqual(CXConfig.value(of: "DXMT_CONFIG", in: bottle), "dxgi.forceSDR=True")
+    }
+
+    func testABottleCapCarriesTheAppWideDXMTOptionsAlong() throws {
+        let app = try write("[EnvironmentVariables]\n\"DXMT_CONFIG\" = \"d3d11.metalSpatialUpscaleFactor=1.5\"\n", "carry-defaults/CrossOver.conf")
+        let bottle = try write("[EnvironmentVariables]\n", "carry/cxbottle.conf")
+        var options = GraphicsOptions.load(from: bottle, inheriting: app)
+        let saved = options
+        options.fpsEnabled = true
+        options.fpsValue = 30
+        try CXConfig.apply(options.changes(from: saved), to: bottle)
+        // DXMT reads one string, so the bottle's own value has to carry what it would have inherited.
+        XCTAssertEqual(CXConfig.value(of: "DXMT_CONFIG", in: bottle),
+                       "d3d11.metalSpatialUpscaleFactor=1.5;d3d11.preferredMaxFrameRate=30")
+    }
+
+    func testDXMTOnlyCapIsReadBackAsTheCap() throws {
+        let conf = try write("[EnvironmentVariables]\n\"DXMT_CONFIG\" = \"d3d11.preferredMaxFrameRate = 45\"\n", "dxmt-only/cxbottle.conf")
+        let options = GraphicsOptions.load(from: conf)
+        XCTAssertTrue(options.fpsEnabled)
+        XCTAssertEqual(options.fpsValue, 45)
+        XCTAssertEqual(options.dxmtOptions, [])
     }
 
     func testCancellationRestoresExternalBottleEvenWhenDuplicateIsDeleted() throws {
@@ -541,9 +715,14 @@ final class StabilityTests: XCTestCase {
             PatchedApp(url: root.appendingPathComponent("CrossOver Patched \($0).app"), name: "CrossOver", gptkVersion: "4.0b2", patchedAt: nil)
         }
         let failure = Failure(title: "Couldn't patch CrossOver", message: "Could not remove download metadata from a file in CrossOver. Check that you own the app and can write to it. Recovery files are available in the location shown in Details.")
-        let states: [(String, Phase)] = [("ready", .idle), ("signing", .running(.signing)), ("error", .failed(failure)), ("success", .done(app.url)), ("first-launch", .idle)]
+        let states: [(String, Phase)] = [("ready", .idle), ("advanced", .idle), ("signing", .running(.signing)), ("error", .failed(failure)), ("success", .done(app.url)), ("first-launch", .idle)]
         for (name, phase) in states {
             engine.phase = phase
+            // The Advanced disclosure opens itself when a MoltenVK build is already chosen.
+            if name == "advanced" {
+                engine.selectedDXMT = try dxmtBuild("0.80")
+                engine.selectMoltenVK(try moltenVKBuild())
+            }
             if name == "first-launch" {
                 try quarantine(app.url, value: "0083;1234;Safari;")
                 engine.setCrossOver(app.url)
@@ -553,7 +732,9 @@ final class StabilityTests: XCTestCase {
                 view.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
                 let size = view.fittingSize
                 XCTAssertEqual(size.width, 520)
-                XCTAssertLessThan(size.height, 750, "\(name) exceeds a typical laptop display height")
+                // Worst case is everything showing at once: copy mode with Advanced open and a
+                // full patched list. Anything past this stops fitting a 13-inch display.
+                XCTAssertLessThan(size.height, 780, "\(name) exceeds a typical laptop display height")
                 view.frame = NSRect(origin: .zero, size: size)
                 let window = NSWindow(contentRect: view.bounds, styleMask: .borderless, backing: .buffered, defer: false)
                 window.appearance = view.appearance
