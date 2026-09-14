@@ -53,6 +53,12 @@ final class StabilityTests: XCTestCase {
         // CrossOver Preview ships aarch64 DXMT that upstream releases leave out.
         _ = try write("stock-x86", "CrossOver.app/Contents/SharedSupport/CrossOver/lib/dxmt/x86_64-windows/d3d11.dll")
         _ = try write("stock-arm", "CrossOver.app/Contents/SharedSupport/CrossOver/lib/dxmt/aarch64-windows/d3d11.dll")
+        // CrossOver 26 keeps one MoltenVK in lib64; Preview keeps one per architecture.
+        for slot in ["lib64", "lib/x86_64"] {
+            let url = app.appendingPathComponent("Contents/SharedSupport/CrossOver/\(slot)/libMoltenVK.dylib")
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: url)
+        }
         try Shell.check("/usr/bin/codesign", ["--force", "--sign", "-", app.path])
         let lib = root.appendingPathComponent("toolkit")
         try payload(at: lib, version: "4.0b2")
@@ -70,9 +76,27 @@ final class StabilityTests: XCTestCase {
         app.appendingPathComponent("Contents/SharedSupport/CrossOver/lib/dxmt")
     }
 
+    /// A stored MoltenVK build made from a real Mach-O, optionally narrowed to one architecture.
+    private func moltenVKBuild(arch: String? = nil) throws -> MoltenVKBuild {
+        let source = root.appendingPathComponent("mvk-source/libMoltenVK.dylib")
+        try fm.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let arch {
+            try Shell.check("/usr/bin/lipo", ["/usr/bin/true", "-thin", arch, "-output", source.path])
+        } else {
+            try fm.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: source)
+        }
+        return try MoltenVKLibrary.importBuild(source, directory: root.appendingPathComponent("mvk-library")) { _ in }
+    }
+
+    private func mvkSlots(_ app: URL) -> [URL] {
+        ["lib64", "lib/x86_64"].map {
+            app.appendingPathComponent("Contents/SharedSupport/CrossOver/\($0)/libMoltenVK.dylib")
+        }
+    }
+
     private func request(_ app: CrossOverBundle, _ kit: Toolkit?, mode: PatchMode = .copy,
-                         dxmt: DXMTBuild? = nil, bottles: [BottleEnv.Bottle] = []) -> PatchRequest {
-        PatchRequest(crossOver: app, toolkit: kit, dxmt: dxmt, mode: mode, destination: root.appendingPathComponent("Patched.app"),
+                         dxmt: DXMTBuild? = nil, moltenVK: MoltenVKBuild? = nil, bottles: [BottleEnv.Bottle] = []) -> PatchRequest {
+        PatchRequest(crossOver: app, toolkit: kit, dxmt: dxmt, moltenVK: moltenVK, mode: mode, destination: root.appendingPathComponent("Patched.app"),
                      applicationsFolder: root.appendingPathComponent("Applications"), replaceExisting: false,
                      graphics: GraphicsSettings(fpsCap: 120, metalHUD: true), bottles: bottles)
     }
@@ -168,6 +192,56 @@ final class StabilityTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: job.destination.path))
         XCTAssertEqual(try Data(contentsOf: app.globalConfig), before)
         XCTAssertFalse(fm.fileExists(atPath: try app.gptkDirectory().appendingPathExtension("stock").path))
+        try assertSigned(app.url)
+    }
+
+    func testMoltenVKReplacesEverySlotAndKeepsEachStock() throws {
+        let (app, _) = try fixture()
+        let build = try moltenVKBuild()
+        let result = try PatchJob(request: request(app, nil, moltenVK: build), log: { _ in }).run()
+        try assertSigned(result)
+        let expected = try Data(contentsOf: build.dylib)
+        for slot in mvkSlots(result) {
+            XCTAssertEqual(try Data(contentsOf: slot), expected, slot.path)
+            XCTAssertTrue(fm.fileExists(atPath: slot.appendingPathExtension("stock").path), slot.path)
+        }
+        // The two cache settings ride along with the build rather than needing their own switch.
+        let patched = try CrossOverBundle(url: result)
+        XCTAssertEqual(CXConfig.value(of: "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM", in: patched.globalConfig), "3")
+        XCTAssertEqual(CXConfig.value(of: "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION", in: patched.globalConfig), "1")
+        // The source app was not touched: no backup was made beside its own slots.
+        for slot in mvkSlots(app.url) {
+            XCTAssertFalse(fm.fileExists(atPath: slot.appendingPathExtension("stock").path), slot.path)
+        }
+    }
+
+    func testMoltenVKBuildForTheWrongArchitectureIsRefused() throws {
+        let (app, _) = try fixture()
+        // Narrow the app's slots to arm64 so an x86_64-only build cannot serve them.
+        for slot in mvkSlots(app.url) {
+            try fm.removeItem(at: slot)
+            try Shell.check("/usr/bin/lipo", ["/usr/bin/true", "-thin", "arm64e", "-output", slot.path])
+        }
+        let build = try moltenVKBuild(arch: "x86_64")
+        let source = try CrossOverBundle(url: app.url)
+        XCTAssertThrowsError(try PatchJob(request: request(source, nil, moltenVK: build), log: { _ in }).run())
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("Patched.app").path))
+        for slot in mvkSlots(app.url) {
+            XCTAssertFalse(fm.fileExists(atPath: slot.appendingPathExtension("stock").path))
+        }
+    }
+
+    func testCancellationAfterMoltenVKSwapRestoresEverySlot() throws {
+        let (app, kit) = try fixture()
+        let originals = try mvkSlots(app.url).map { try Data(contentsOf: $0) }
+        let token = CancellationToken()
+        XCTAssertThrowsError(try PatchJob(request: request(app, kit, mode: .inPlace, moltenVK: try moltenVKBuild()),
+                                          log: { _ in },
+                                          onStep: { if $0 == .signing { token.cancel() } }, token: token).run())
+        for (slot, original) in zip(mvkSlots(app.url), originals) {
+            XCTAssertEqual(try Data(contentsOf: slot), original, slot.path)
+            XCTAssertFalse(fm.fileExists(atPath: slot.appendingPathExtension("stock").path))
+        }
         try assertSigned(app.url)
     }
 

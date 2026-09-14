@@ -11,6 +11,8 @@ struct PatchRequest: Sendable {
     var toolkit: Toolkit?
     /// Optional: also replace the CrossOver's bundled DXMT with this build.
     var dxmt: DXMTBuild?
+    /// Optional: also replace the CrossOver's bundled MoltenVK with this build.
+    var moltenVK: MoltenVKBuild?
     let mode: PatchMode
     /// Where the copy goes (`.copy` mode). For `.inPlace` this is the source app itself.
     let destination: URL
@@ -35,6 +37,8 @@ struct PatchReceipt: Codable {
     var dlssAliases: [String] = []
     var dxmtVersion: String?
     var dxmtStock: String?
+    var moltenVKBuild: String?
+    var moltenVKSlots: [String]?
     let environment: [String: String]
 }
 
@@ -132,8 +136,8 @@ struct PatchJob {
         // 1. Make sure the stored toolkit is intact before touching anything.
         onStep(.checkingToolkit)
         try token.checkpoint()
-        guard request.toolkit != nil || request.dxmt != nil else {
-            throw PatchError.io("Nothing to install: choose a Game Porting Toolkit, a DXMT build, or both.")
+        guard request.toolkit != nil || request.dxmt != nil || request.moltenVK != nil else {
+            throw PatchError.io("Nothing to install: choose a Game Porting Toolkit, a DXMT build or a MoltenVK build.")
         }
         var installedVersion: String?
         if let toolkit = request.toolkit {
@@ -232,7 +236,13 @@ struct PatchJob {
             dxmtStock = try installDXMT(build, in: copy, within: dst, rollback: &rollback)
         }
 
-        // 6. Verify and record what happened.
+        // 6. Optionally replace MoltenVK, the Vulkan driver Doom, Wolfenstein and Detroit use.
+        var moltenVKSlots: [String] = []
+        if let build = request.moltenVK {
+            moltenVKSlots = try installMoltenVK(build, in: copy, within: dst, rollback: &rollback)
+        }
+
+        // 7. Verify and record what happened.
         onStep(.finalizing)
         try token.checkpoint()
         let receipt = PatchReceipt(
@@ -244,6 +254,7 @@ struct PatchJob {
             gptkDirectory: outerGptkDir.map { String($0.path.dropFirst(dst.path.count + 1)) },
             stockBackup: outerStockBackup.map { String($0.path.dropFirst(dst.path.count + 1)) }, dlssAliases: aliases,
             dxmtVersion: request.dxmt?.version, dxmtStock: dxmtStock.map { String($0.path.dropFirst(dst.path.count + 1)) },
+            moltenVKBuild: request.moltenVK?.name, moltenVKSlots: moltenVKSlots.isEmpty ? nil : moltenVKSlots,
             environment: Dictionary(uniqueKeysWithValues: request.graphics.assignments.compactMap { key, value in value.map { (key, $0) } }))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -255,7 +266,8 @@ struct PatchJob {
         try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: dst.path)
 
         // 6. Environment: app-wide in the copy's etc/CrossOver.conf, then per bottle on top.
-        let settings = request.graphics
+        var settings = request.graphics
+        if request.moltenVK != nil { settings.moltenVKShaderCache = true }
         if settings.storeInCopy {
             let conf = copy.globalConfig
             try FileSafety.requireContained(conf, in: dst)
@@ -331,6 +343,7 @@ struct PatchJob {
         var carries: [String] = []
         if let installedVersion { carries.append("D3DMetal \(installedVersion)") }
         if let build = request.dxmt { carries.append("DXMT \(build.version)") }
+        if let build = request.moltenVK, !moltenVKSlots.isEmpty { carries.append("MoltenVK “\(build.name)”") }
         log("Done. \(finalURL.lastPathComponent) now carries \(carries.joined(separator: " and ")).")
         return finalURL
     }
@@ -392,6 +405,68 @@ struct PatchJob {
         log("DXMT \(build.version) is in place.")
         if let previousPatch { try? fm.removeItem(at: previousPatch) }
         return stock
+    }
+
+    /// Replaces every libMoltenVK.dylib the build ships, keeping each original as
+    /// `libMoltenVK.dylib.stock`. A slot is only written when the supplied build actually contains
+    /// that slot's architecture: an arm64-only library in CrossOver 26's x86_64 slot would leave
+    /// Vulkan broken with no obvious cause. Returns the slots written, relative to the bundle.
+    private func installMoltenVK(_ build: MoltenVKBuild, in copy: CrossOverBundle, within bundle: URL,
+                                 rollback: inout (() -> [String])?) throws -> [String] {
+        try token.checkpoint()
+        guard MoltenVKLibrary.isValid(build.path) else {
+            throw PatchError.io("The library copy of the MoltenVK build “\(build.name)” is incomplete. Remove it from the MoltenVK menu and add it again.")
+        }
+        let slots = copy.moltenVKSlots()
+        guard !slots.isEmpty else {
+            log("Warning: this CrossOver has no libMoltenVK.dylib, so MoltenVK was skipped.")
+            return []
+        }
+        let supplied = Set(build.architectures)
+        var written: [(slot: URL, stock: URL)] = []
+        var relative: [String] = []
+        let previousRollback = rollback
+        // Put every slot back, not just the last one, if a later step fails.
+        func undoAll() -> [String] {
+            var problems: [String] = []
+            for item in written.reversed() {
+                do {
+                    if FileSafety.exists(item.slot) { try fm.removeItem(at: item.slot) }
+                    try fm.moveItem(at: item.stock, to: item.slot)
+                } catch {
+                    problems.append("Couldn't restore \(item.slot.path): \(error.localizedDescription). The original is at \(item.stock.path).")
+                }
+            }
+            if problems.isEmpty && !written.isEmpty { log("Restored the stock MoltenVK.") }
+            return problems
+        }
+
+        for slot in slots {
+            try token.checkpoint()
+            let needed = MoltenVKLibrary.architectures(of: slot)
+            if !needed.isEmpty, supplied.isDisjoint(with: needed) {
+                log("Skipped \(slot.lastPathComponent) in \(slot.deletingLastPathComponent().lastPathComponent): it needs \(needed.joined(separator: " or ")) and this build has \(build.architectures.joined(separator: ", ")).")
+                continue
+            }
+            let stock = slot.appendingPathExtension("stock")
+            try FileSafety.requireContained(stock, in: bundle)
+            if !FileSafety.exists(stock) {
+                try fm.copyItem(at: slot, to: stock)
+            }
+            try fm.removeItem(at: slot)
+            try fm.copyItem(at: build.dylib, to: slot)
+            try Shell.check("/bin/chmod", ["755", slot.path], token: token)
+            written.append((slot, stock))
+            relative.append(String(slot.path.dropFirst(bundle.path.count + 1)))
+            rollback = { undoAll() + (previousRollback?() ?? []) }
+            log("Installed MoltenVK “\(build.name)” into \(slot.deletingLastPathComponent().lastPathComponent)/")
+        }
+
+        guard !written.isEmpty else {
+            throw PatchError.io("This MoltenVK build is \(build.architectures.joined(separator: ", ")) only, which does not match this CrossOver's Vulkan library. Use a build made for this CrossOver.")
+        }
+        try Quarantine.strip(under: bundle, token: token)
+        return relative
     }
 
     // MARK: - Rollback

@@ -104,6 +104,16 @@ struct CrossOverBundle: Sendable {
         throw PatchError.unsupportedLayout("neither lib64/apple_gptk nor lib/apple_gptk exists in \(sharedSupport.path). This CrossOver build has no D3DMetal support to replace.")
     }
 
+    /// Every libMoltenVK.dylib the build ships. CrossOver 26 keeps one in `lib64`; CrossOver
+    /// Preview keeps a thin copy per architecture under `lib/x86_64` and `lib/aarch64`.
+    func moltenVKSlots() -> [URL] {
+        let fm = FileManager.default
+        let candidates = ["lib64", "lib/x86_64", "lib/aarch64", "lib"].map {
+            sharedSupport.appendingPathComponent($0).appendingPathComponent(MoltenVKLibrary.dylibName)
+        }
+        return candidates.filter { fm.fileExists(atPath: $0.path) }
+    }
+
     var installedD3DMetalVersion: String? {
         guard let dir = try? gptkDirectory() else { return nil }
         return D3DMetalInfo.read(inLib: dir).version

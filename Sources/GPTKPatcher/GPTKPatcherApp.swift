@@ -52,7 +52,7 @@ struct GPTKPatcherApp: App {
 }
 
 /// `GPTKPatcher --cli --quit-bottle <name>` ends everything running in that bottle; `--bottle-status <name>` only lists it.
-/// `GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version | none> [destination.app] [--in-place] [--replace] [--fps N] [--hud] [--dxmt ARCHIVE|VERSION] [--no-copy-env] [--bottle NAME]...`
+/// `GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version | none> [destination.app] [--in-place] [--replace] [--fps N] [--hud] [--dxmt ARCHIVE|VERSION] [--moltenvk FILE|NAME] [--no-copy-env] [--bottle NAME]...`
 /// Runs the same job without the window, for scripting and testing.
 enum HeadlessRunner {
     private static func quitBottleAndExit(named name: String, dryRun: Bool) -> Never {
@@ -105,6 +105,7 @@ enum HeadlessRunner {
         var storeInCopy = true
         var bottleNames: [String] = []
         var dxmtArg: String?
+        var mvkArg: String?
         var positional: [String] = []
         var i = 0
         while i < args.count {
@@ -121,6 +122,10 @@ enum HeadlessRunner {
                 i += 1
                 guard i < args.count else { fail("--dxmt needs a .tar.gz archive or an imported version", status: 64) }
                 dxmtArg = args[i]
+            case "--moltenvk":
+                i += 1
+                guard i < args.count else { fail("--moltenvk needs a .dylib, an archive, or an imported build name", status: 64) }
+                mvkArg = args[i]
             case "--bottle":
                 i += 1
                 guard i < args.count else { fail("--bottle needs a bottle name", status: 64) }
@@ -154,7 +159,7 @@ enum HeadlessRunner {
             let toolkitArg = positional[1]
             var toolkit: Toolkit?
             if toolkitArg.lowercased() == "none" {
-                guard dxmtArg != nil else { fail("with a toolkit of 'none' you must pass --dxmt", status: 64) }
+                guard dxmtArg != nil || mvkArg != nil else { fail("with a toolkit of 'none' you must pass --dxmt or --moltenvk", status: 64) }
             } else if toolkitArg.lowercased().hasSuffix(".dmg") {
                 toolkit = try ToolkitLibrary.importImage(URL(fileURLWithPath: toolkitArg), token: token) { print($0) }
             } else if let stored = ToolkitLibrary.list().first(where: { $0.version == toolkitArg || $0.displayName == toolkitArg }) {
@@ -182,8 +187,21 @@ enum HeadlessRunner {
                     throw PatchError.io("No DXMT build named \(dxmtArg) in the library\(known.isEmpty ? "" : " (have: \(known))"). Pass a .tar.gz to import one.")
                 }
             }
+            var moltenVK: MoltenVKBuild?
+            if let mvkArg {
+                if MoltenVKLibrary.looksLikeBuild(URL(fileURLWithPath: mvkArg)) {
+                    moltenVK = try MoltenVKLibrary.importBuild(URL(fileURLWithPath: mvkArg), token: token) { print($0) }
+                } else if FileManager.default.fileExists(atPath: mvkArg) {
+                    throw PatchError.io("\(mvkArg) isn't a MoltenVK build. Pass a libMoltenVK.dylib or the archive it came in.")
+                } else if let stored = MoltenVKLibrary.list().first(where: { $0.name == mvkArg }) {
+                    moltenVK = stored
+                } else {
+                    let known = MoltenVKLibrary.list().map(\.name).joined(separator: ", ")
+                    throw PatchError.io("No MoltenVK build named \(mvkArg) in the library\(known.isEmpty ? "" : " (have: \(known))").")
+                }
+            }
             let request = PatchRequest(
-                crossOver: crossOver, toolkit: toolkit, dxmt: dxmt, mode: inPlace ? .inPlace : .copy,
+                crossOver: crossOver, toolkit: toolkit, dxmt: dxmt, moltenVK: moltenVK, mode: inPlace ? .inPlace : .copy,
                 destination: URL(fileURLWithPath: inPlace ? positional[0] : positional[2]),
                 applicationsFolder: applications,
                 replaceExisting: replace,

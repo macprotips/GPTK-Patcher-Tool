@@ -39,6 +39,11 @@ final class PatchEngine {
     var toolkitStatus: DropStatus = .empty
     var gptkVersion: String? { selectedToolkit?.version }
 
+    var moltenVKBuilds: [MoltenVKBuild] = []
+    var selectedMoltenVK: MoltenVKBuild?
+    var importingMoltenVK: URL?
+    var moltenVKStatus: DropStatus = .empty
+
     var dxmtBuilds: [DXMTBuild] = []
     var selectedDXMT: DXMTBuild?
     var importingDXMT: URL?
@@ -92,8 +97,8 @@ final class PatchEngine {
     var isBusy: Bool { isRunning || isImporting }
     var compatibilityIssue: String? { selectedToolkit?.compatibilityIssue }
     /// Either component is enough to patch; both is the usual case.
-    var hasSomethingToInstall: Bool { selectedToolkit != nil || selectedDXMT != nil }
-    var isReady: Bool { crossOver != nil && hasSomethingToInstall && importingImage == nil && importingDXMT == nil && !isBusy && compatibilityIssue == nil }
+    var hasSomethingToInstall: Bool { selectedToolkit != nil || selectedDXMT != nil || selectedMoltenVK != nil }
+    var isReady: Bool { crossOver != nil && hasSomethingToInstall && importingImage == nil && importingDXMT == nil && importingMoltenVK == nil && !isBusy && compatibilityIssue == nil }
 
     /// The name the copy will get. Never replaces anything: if the name is taken, a counter is added.
     var outputName: String {
@@ -141,6 +146,9 @@ final class PatchEngine {
         case _ where DXMTLibrary.looksLikeArchive(url):
             guard importingDXMT == nil else { return false }
             importDXMT(from: url); return true
+        case _ where MoltenVKLibrary.looksLikeBuild(url):
+            guard importingMoltenVK == nil else { return false }
+            importMoltenVK(from: url); return true
         default: return false
         }
     }
@@ -307,6 +315,59 @@ final class PatchEngine {
         dxmtStatus = .empty
     }
 
+    // MARK: MoltenVK library
+
+    func refreshMoltenVK() {
+        moltenVKBuilds = MoltenVKLibrary.list()
+        if let selected = selectedMoltenVK, let match = moltenVKBuilds.first(where: { $0.name == selected.name }) {
+            selectedMoltenVK = match
+        } else if selectedMoltenVK != nil {
+            selectedMoltenVK = moltenVKBuilds.first
+        }
+        if moltenVKBuilds.isEmpty { moltenVKStatus = .empty }
+    }
+
+    func selectMoltenVK(_ build: MoltenVKBuild) {
+        selectedMoltenVK = build
+        moltenVKStatus = .ok(build.name)
+    }
+
+    func importMoltenVK(from url: URL) {
+        importingMoltenVK = url
+        moltenVKStatus = .checking("Adding to the library…")
+        if case .cancelled = phase { phase = .idle }
+        let token = CancellationToken()
+        Task.detached(priority: .userInitiated) {
+            let result: Result<MoltenVKBuild, Error> = Result { try MoltenVKLibrary.importBuild(url, token: token) { _ in } }
+            await MainActor.run {
+                guard self.importingMoltenVK == url else { return }
+                self.importingMoltenVK = nil
+                switch result {
+                case .success(let build):
+                    self.moltenVKBuilds = MoltenVKLibrary.list()
+                    self.selectedMoltenVK = self.moltenVKBuilds.first { $0.name == build.name } ?? build
+                    self.moltenVKStatus = .ok(build.name)
+                case .failure(let error):
+                    self.moltenVKStatus = .failed(Self.reason(for: error))
+                }
+            }
+        }
+    }
+
+    func removeMoltenVK(_ build: MoltenVKBuild) {
+        try? MoltenVKLibrary.remove(build)
+        moltenVKBuilds = MoltenVKLibrary.list()
+        if selectedMoltenVK?.name == build.name { selectedMoltenVK = moltenVKBuilds.first }
+        moltenVKStatus = selectedMoltenVK.map { .ok($0.name) } ?? .empty
+    }
+
+    /// Leaves the build in the library but takes it out of this patch.
+    func clearMoltenVK() {
+        importingMoltenVK = nil
+        selectedMoltenVK = nil
+        moltenVKStatus = .empty
+    }
+
     // MARK: Patching
 
     func patch() {
@@ -338,7 +399,7 @@ final class PatchEngine {
             DispatchQueue.main.async { if self.isRunning { self.phase = .running(step) } }
         }
         let request = PatchRequest(
-            crossOver: crossOver, toolkit: selectedToolkit, dxmt: selectedDXMT, mode: mode,
+            crossOver: crossOver, toolkit: selectedToolkit, dxmt: selectedDXMT, moltenVK: selectedMoltenVK, mode: mode,
             destination: mode == .inPlace ? crossOver.url : outputURL,
             applicationsFolder: applicationsFolder,
             replaceExisting: false, graphics: graphics, bottles: [])
