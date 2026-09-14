@@ -143,7 +143,7 @@ struct ContentView: View {
 
     /// True once there is either a result to preview or an app that has already been patched.
     private var showsPlannedOutput: Bool {
-        engine.mode == .copy && engine.crossOver != nil && engine.selectedToolkit != nil
+        engine.mode == .copy && engine.crossOver != nil && engine.hasSomethingToInstall
     }
     private var showsOutputSection: Bool { showsPlannedOutput || !engine.patchedApps.isEmpty }
 
@@ -388,7 +388,7 @@ private struct WhatChangesPopover: View {
             } else {
                 bullet("Modifies the selected CrossOver.app directly and adds the toolkit version to its name. Quit CrossOver before patching it.")
             }
-            bullet("Replaces the app's built-in D3DMetal with the version from the toolkit. The original is kept next to it as apple_gptk.stock, so the change can be undone.")
+            bullet("Replaces the app's built-in D3DMetal with the version from the toolkit, keeping the original as apple_gptk.stock so the change can be undone. Choose \"Leave the toolkit as it is\" to skip it and update only DXMT.")
             bullet("Adds the nvngx.dll that games with DLSS look for, and turns DLSS to MetalFX on for every bottle the app launches.")
             bullet("Checks the original app's signature, then signs and verifies the modified app for local use. Its embedded libraries retain their signatures. The local copy's download metadata is cleared so macOS can open it from this location.")
             bullet("Replaces the bundled DXMT when a build is chosen, keeping the original as dxmt.stock. Anything a DXMT release leaves out, such as the ARM64 files CrossOver Preview ships, is carried over.")
