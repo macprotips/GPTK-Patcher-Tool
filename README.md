@@ -1,7 +1,8 @@
 # GPTK Patcher Tool
 
-CrossOver ships with a build of Apple's Game Porting Toolkit. This replaces it with a different
-one, in a duplicate of CrossOver or in the installed app, and sets up DLSS → MetalFX.
+CrossOver ships with a build of Apple's Game Porting Toolkit, and a build of DXMT. This replaces
+either with a newer one, in a duplicate of CrossOver or in the installed app, and sets up
+DLSS → MetalFX.
 
 ## Requirements
 
@@ -9,6 +10,8 @@ one, in a duplicate of CrossOver or in the installed app, and sets up DLSS → M
 - CrossOver 25, 26, or CrossOver Preview 27.
 - A Game Porting Toolkit disk image from Apple's developer downloads. Nothing from Apple is
   redistributed here; you supply your own copy.
+- Optional, to update DXMT: a release archive (`dxmt-vX.XX-builtin.tar.gz`) from
+  [3Shain/dxmt](https://github.com/3Shain/dxmt/releases).
 
 ## Development
 
@@ -61,8 +64,11 @@ notarization, with credentials configured as described at the top of that script
    Files can also be dropped on the app icon, pasted with ⌘V, or picked with a file chooser. The
    full `Game_Porting_Toolkit_x.dmg` works directly; the evaluation-environment image inside it is
    found automatically.
-3. Choose **Duplicate CrossOver** or **Patch Existing**.
-4. Click **Patch CrossOver**.
+3. Optionally drop a DXMT release archive on the **DXMT** line to update DXMT in the same pass.
+   Left alone, CrossOver's own DXMT is untouched; the menu's *Leave DXMT as it is* puts it back
+   to untouched.
+4. Choose **Duplicate CrossOver** or **Patch Existing**.
+5. Click **Patch CrossOver**.
 
 The patcher checks macOS's first-launch approval marker when you drop, paste, or choose CrossOver.
 If the download is still awaiting approval, it refuses the selection and asks you to launch it,
@@ -71,7 +77,7 @@ It does not open or quit CrossOver for you. This is a check of the download's ap
 macOS does not provide a complete launch history for every copied or unquarantined app.
 
 Imported toolkits are kept in `~/Library/Application Support/GPTKPatcher/Toolkits/<version>/` and
-picked from the menu on the toolkit tile.
+DXMT builds in `.../GPTKPatcher/DXMT/<version>/`, each picked from its own menu.
 
 Patched apps appear in the **Patched** list. *Reveal in Finder* shows the app; the gear sets the
 D3DMetal frame rate cap, the Metal Performance HUD and Metal 4. **App defaults** apply to bottles
@@ -104,6 +110,9 @@ do not need to be changed.
   second patch replaces only the previous patch. On a handled failure or cancellation, the toolkit,
   receipt, configs and signature are restored and an unfinished duplicate is deleted. Failed
   recovery is reported with the retained backup location in **Details**.
+- Replaces `lib/dxmt` when a DXMT build is chosen, keeping the original as `dxmt.stock`.
+  Upstream releases ship x86_64 and i386 only, so anything else the bundled build had is
+  carried over — CrossOver Preview's `aarch64` DXMT survives the swap.
 - Creates `nvngx.dll` and `nvngx.so` copies of the toolkit's `nvngx-on-metalfx` shim. CrossOver's
   loader redirects a game's `nvngx.dll` to that file; without it DLSS games get no MetalFX.
 - Writes `D3DM_ENABLE_METALFX=1` and `DXMT_ENABLE_NVEXT=1` to the app's

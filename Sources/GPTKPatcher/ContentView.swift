@@ -44,6 +44,7 @@ struct ContentView: View {
             guard loadsData else { return }
             NSApp.activate(ignoringOtherApps: true)
             engine.refreshToolkits()
+            engine.refreshDXMT()
             engine.refreshPatchedApps()
             DebugHooks.apply(to: engine)
         }
@@ -95,6 +96,10 @@ struct ContentView: View {
                          url: engine.crossOverURL, status: engine.crossOverStatus,
                          onPick: { engine.route($0) }, onClear: engine.clearCrossOver)
                 ToolkitTile(engine: engine)
+            }
+
+            if engine.crossOverInstructions == nil && engine.compatibilityIssue == nil && !engine.isImporting {
+                DXMTRow(engine: engine).padding(.top, 8)
             }
 
             if let instructions = engine.crossOverInstructions {
@@ -386,6 +391,7 @@ private struct WhatChangesPopover: View {
             bullet("Replaces the app's built-in D3DMetal with the version from the toolkit. The original is kept next to it as apple_gptk.stock, so the change can be undone.")
             bullet("Adds the nvngx.dll that games with DLSS look for, and turns DLSS to MetalFX on for every bottle the app launches.")
             bullet("Checks the original app's signature, then signs and verifies the modified app for local use. Its embedded libraries retain their signatures. The local copy's download metadata is cleared so macOS can open it from this location.")
+            bullet("Replaces the bundled DXMT when a build is chosen, keeping the original as dxmt.stock. Anything a DXMT release leaves out, such as the ARM64 files CrossOver Preview ships, is carried over.")
             bullet("Leaves a receipt inside the app. That is how it appears in the Patched list, where the gear sets a frame rate cap, the Metal Performance HUD, and Metal 4.")
             bullet("Each toolkit you add is stored in ~/Library/Application Support/GPTKPatcher so you can switch between versions later.")
             Text("A patched CrossOver is not supported by CodeWeavers.")
@@ -644,5 +650,136 @@ private struct PlannedOutputRow: View {
         .padding(.vertical, 8)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Output: \(name), will be created when you patch")
+    }
+}
+
+/// The optional DXMT input: CrossOver bundles its own DXMT, and a release archive replaces it.
+/// Empty it is a drop target; with builds in the library it is a menu of them.
+private struct DXMTRow: View {
+    @Bindable var engine: PatchEngine
+
+    @State private var targeted = false
+    @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 10) {
+            SectionLabel("DXMT")
+            content
+            Spacer(minLength: 8)
+            trailing
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .frame(height: 38)
+        .modifier(InputTileChrome(targeted: targeted, hovering: hovering, isEmpty: chosen == nil, isError: isError))
+        .onHover { hovering = $0 }
+        .dropDestination(for: URL.self) { urls, _ in
+            var accepted = false
+            for url in urls where engine.route(url) { accepted = true }
+            return accepted
+        } isTargeted: { targeted = $0 }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: targeted)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("DXMT")
+    }
+
+    private var chosen: DXMTBuild? { engine.selectedDXMT }
+    private var isError: Bool { if case .failed = engine.dxmtStatus { return true } else { return false } }
+
+    @ViewBuilder
+    private var content: some View {
+        switch engine.dxmtStatus {
+        case .checking(let text):
+            Text(text).foregroundStyle(.secondary)
+        case .failed(let text):
+            Text(text).font(.callout).foregroundStyle(.red).lineLimit(2)
+        case .empty, .ok:
+            if chosen != nil || !engine.dxmtBuilds.isEmpty {
+                Menu {
+                    Picker("DXMT version", selection: selection) {
+                        ForEach(engine.dxmtBuilds) { build in
+                            Text(build.displayName).tag(Optional(build))
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                    Divider()
+                    Button("Add DXMT Release…", action: openPanel)
+                    if let chosen {
+                        Button("Leave DXMT as it is") { engine.clearDXMT() }
+                        Button("Remove \(chosen.displayName) from Library", role: .destructive) { engine.removeDXMT(chosen) }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(chosen?.displayName ?? "Not replacing DXMT")
+                            .foregroundStyle(chosen == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("DXMT version")
+                .accessibilityValue(chosen?.displayName ?? "not replacing DXMT")
+            } else {
+                Button(action: openPanel) {
+                    Text(targeted ? "Release to add" : "Drop a DXMT release here, or click to choose")
+                        .foregroundStyle(targeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var trailing: some View {
+        switch engine.dxmtStatus {
+        case .checking:
+            ProgressView().controlSize(.small)
+        case .failed:
+            Button { engine.clearDXMT() } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).font(.system(size: 14))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        case .empty:
+            Text("Optional").font(.caption).foregroundStyle(.tertiary).padding(.trailing, 4)
+        case .ok:
+            if hovering {
+                Button { engine.clearDXMT() } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).font(.system(size: 14))
+                }
+                .buttonStyle(.plain)
+                .help("Leave DXMT as it is")
+                .accessibilityLabel("Don't replace DXMT")
+            } else {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 14))
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private var selection: Binding<DXMTBuild?> {
+        Binding(get: { engine.selectedDXMT }, set: { if let b = $0 { engine.selectDXMT(b) } })
+    }
+
+    private func openPanel() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose a DXMT release archive"
+        if panel.runModal() == .OK, let url = panel.url {
+            guard DXMTLibrary.looksLikeArchive(url) else {
+                engine.dxmtStatus = .failed("That isn't a DXMT release archive. Pick the dxmt-vX.XX-builtin.tar.gz from the releases page.")
+                return
+            }
+            engine.importDXMT(from: url)
+        }
     }
 }
