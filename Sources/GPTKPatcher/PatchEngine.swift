@@ -91,11 +91,14 @@ final class PatchEngine {
     var isImporting: Bool { importToken != nil }
     var isBusy: Bool { isRunning || isImporting }
     var compatibilityIssue: String? { selectedToolkit?.compatibilityIssue }
-    var isReady: Bool { crossOver != nil && selectedToolkit != nil && importingImage == nil && importingDXMT == nil && !isBusy && compatibilityIssue == nil }
+    /// Either component is enough to patch; both is the usual case.
+    var hasSomethingToInstall: Bool { selectedToolkit != nil || selectedDXMT != nil }
+    var isReady: Bool { crossOver != nil && hasSomethingToInstall && importingImage == nil && importingDXMT == nil && !isBusy && compatibilityIssue == nil }
 
     /// The name the copy will get. Never replaces anything: if the name is taken, a counter is added.
     var outputName: String {
-        let base = "\(crossOver?.name ?? "CrossOver") (GPTK \(gptkVersion ?? "…"))"
+        let component = gptkVersion.map { "GPTK \($0)" } ?? selectedDXMT.map { "DXMT \($0.version)" } ?? "GPTK …"
+        let base = "\(crossOver?.name ?? "CrossOver") (\(component))"
         var candidate = base + ".app"
         var n = 2
         while FileManager.default.fileExists(atPath: outputFolder.appendingPathComponent(candidate).path) {
@@ -187,6 +190,12 @@ final class PatchEngine {
             selectedToolkit = toolkits.first
         }
         if toolkits.isEmpty, case .ok = toolkitStatus { toolkitStatus = .empty }
+    }
+
+    /// Leaves the toolkit in the library but takes it out of this patch, so only DXMT is replaced.
+    func clearToolkit() {
+        selectedToolkit = nil
+        toolkitStatus = .empty
     }
 
     func selectToolkit(_ toolkit: Toolkit) {
@@ -329,7 +338,7 @@ final class PatchEngine {
             DispatchQueue.main.async { if self.isRunning { self.phase = .running(step) } }
         }
         let request = PatchRequest(
-            crossOver: crossOver, toolkit: toolkit, dxmt: selectedDXMT, mode: mode,
+            crossOver: crossOver, toolkit: selectedToolkit, dxmt: selectedDXMT, mode: mode,
             destination: mode == .inPlace ? crossOver.url : outputURL,
             applicationsFolder: applicationsFolder,
             replaceExisting: false, graphics: graphics, bottles: [])
