@@ -70,7 +70,7 @@ final class StabilityTests: XCTestCase {
         app.appendingPathComponent("Contents/SharedSupport/CrossOver/lib/dxmt")
     }
 
-    private func request(_ app: CrossOverBundle, _ kit: Toolkit, mode: PatchMode = .copy,
+    private func request(_ app: CrossOverBundle, _ kit: Toolkit?, mode: PatchMode = .copy,
                          dxmt: DXMTBuild? = nil, bottles: [BottleEnv.Bottle] = []) -> PatchRequest {
         PatchRequest(crossOver: app, toolkit: kit, dxmt: dxmt, mode: mode, destination: root.appendingPathComponent("Patched.app"),
                      applicationsFolder: root.appendingPathComponent("Applications"), replaceExisting: false,
@@ -169,6 +169,27 @@ final class StabilityTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: app.globalConfig), before)
         XCTAssertFalse(fm.fileExists(atPath: try app.gptkDirectory().appendingPathExtension("stock").path))
         try assertSigned(app.url)
+    }
+
+    func testDXMTAloneLeavesTheToolkitUntouched() throws {
+        let (app, _) = try fixture()
+        let result = try PatchJob(request: request(app, nil, dxmt: try dxmtBuild("0.80")), log: { _ in }).run()
+        try assertSigned(result)
+        let patched = try CrossOverBundle(url: result)
+        // The bundled toolkit is left exactly as it was, and no stock copy is made of it.
+        XCTAssertEqual(patched.installedD3DMetalVersion, "3.0")
+        XCTAssertFalse(fm.fileExists(atPath: try patched.gptkDirectory().appendingPathExtension("stock").path))
+        XCTAssertEqual(try Data(contentsOf: dxmtDir(result).appendingPathComponent("x86_64-windows/d3d11.dll")), Data("build-0.80".utf8))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: try Data(contentsOf: result.appendingPathComponent(PatchedAppRegistry.receiptPath))) as? [String: Any])
+        XCTAssertEqual(json["dxmtVersion"] as? String, "0.80")
+        XCTAssertNil(json["gptkD3DMetalVersion"])
+    }
+
+    func testPatchWithNeitherComponentIsRejected() throws {
+        let (app, _) = try fixture()
+        XCTAssertThrowsError(try PatchJob(request: request(app, nil), log: { _ in }).run())
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("Patched.app").path))
     }
 
     func testDXMTSwapKeepsStockAndTheArchesTheReleaseOmits() throws {

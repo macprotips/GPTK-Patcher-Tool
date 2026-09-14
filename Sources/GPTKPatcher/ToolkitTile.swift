@@ -52,12 +52,14 @@ struct ToolkitTile: View {
                     Divider()
                     Button("Add Toolkit…", action: openPanel)
                     if let toolkit = engine.selectedToolkit {
+                        Button("Leave the toolkit as it is") { engine.clearToolkit() }
                         Button("Remove \(toolkit.displayName) from Library", role: .destructive) { engine.removeToolkit(toolkit) }
                     }
                 } label: {
                     HStack(spacing: 5) {
-                        Text(engine.selectedToolkit?.displayName ?? "Choose a version")
+                        Text(engine.selectedToolkit?.displayName ?? "Not replacing GPTK")
                             .font(.body.weight(.medium))
+                            .foregroundStyle(engine.selectedToolkit == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                         Image(systemName: "chevron.down")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
@@ -77,6 +79,12 @@ struct ToolkitTile: View {
                         .foregroundStyle(targeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("This CrossOver keeps its own toolkit")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 0)
@@ -87,9 +95,11 @@ struct ToolkitTile: View {
         .frame(height: FileTile.height)
         .modifier(InputTileChrome(targeted: targeted, hovering: hovering, isEmpty: false, isError: false))
         .overlay(alignment: .topTrailing) {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 14))
-                .padding(10)
-                .accessibilityHidden(true)
+            if engine.selectedToolkit != nil {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 14))
+                    .padding(10)
+                    .accessibilityHidden(true)
+            }
         }
         .onHover { hovering = $0 }
         .contextMenu {

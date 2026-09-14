@@ -66,7 +66,8 @@ notarization, with credentials configured as described at the top of that script
    found automatically.
 3. Optionally drop a DXMT release archive on the **DXMT** line to update DXMT in the same pass.
    Left alone, CrossOver's own DXMT is untouched; the menu's *Leave DXMT as it is* puts it back
-   to untouched.
+   to untouched. Either component can be skipped: choose *Leave the toolkit as it is* on the
+   toolkit tile to update only DXMT. One of the two has to be chosen.
 4. Choose **Duplicate CrossOver** or **Patch Existing**.
 5. Click **Patch CrossOver**.
 
@@ -110,6 +111,8 @@ do not need to be changed.
   second patch replaces only the previous patch. On a handled failure or cancellation, the toolkit,
   receipt, configs and signature are restored and an unfinished duplicate is deleted. Failed
   recovery is reported with the retained backup location in **Details**.
+- Skips the toolkit entirely when none is chosen, so a patch can update DXMT alone. The
+  bundled `apple_gptk` is then left exactly as it was, with no backup made of it.
 - Replaces `lib/dxmt` when a DXMT build is chosen, keeping the original as `dxmt.stock`.
   Upstream releases ship x86_64 and i386 only, so anything else the bundled build had is
   carried over — CrossOver Preview's `aarch64` DXMT survives the swap.
