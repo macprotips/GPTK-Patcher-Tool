@@ -60,7 +60,7 @@ enum HeadlessRunner {
             FileHandle.standardError.write(Data("error: no bottle named \(name)\n".utf8)); exit(1)
         }
         guard let running = BottleEnv.runningBottle(for: bottle) else { print("Nothing from the \(name) bottle is running."); exit(0) }
-        print("\(dryRun ? "Running in" : "Ending") \(name): server \(running.serverPID.map(String.init) ?? "none"), \(running.clientPIDs.count) program(s)\(running.isStale ? ", stale session" : "") — pids \(running.clientPIDs.map(String.init).joined(separator: " "))")
+        print("\(dryRun ? "Running in" : "Ending") \(name): server \(running.serverPID.map(String.init) ?? "none"), \(running.clientPIDs.count) program(s)\(running.isStale ? ", stale session" : ""), pids \(running.clientPIDs.map(String.init).joined(separator: " "))")
         if dryRun { exit(0) }
         do { try BottleEnv.quit(running) } catch { FileHandle.standardError.write(Data("error: \(error.localizedDescription)\n".utf8)); exit(1) }
         if let left = BottleEnv.runningBottle(for: bottle) { print("Still running: \(left.clientPIDs.count) program(s)"); exit(2) }
