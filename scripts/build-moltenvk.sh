@@ -47,7 +47,7 @@ command -v xcodebuild >/dev/null || { echo "Xcode is required to build MoltenVK.
 work="$(mktemp -d)/MoltenVK"
 trap 'rm -rf "$(dirname "$work")"' EXIT
 
-echo "Cloning MoltenVK $ref…"
+echo "Cloning MoltenVK ${ref}…"
 git clone --quiet --depth 1 --branch "$ref" https://github.com/KhronosGroup/MoltenVK.git "$work"
 commit="$(git -C "$work" rev-parse --short HEAD)"
 
