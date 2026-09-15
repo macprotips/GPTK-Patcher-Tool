@@ -359,8 +359,10 @@ final class StabilityTests: XCTestCase {
         let result = try PatchJob(request: request(CrossOverBundle(url: first), nil, mode: .inPlace,
                                                    dxmt: try dxmtBuild("0.80")), log: { _ in }).run()
         try assertSigned(result)
-        // The name lists everything the app carries, not just what this run installed.
-        XCTAssertEqual(result.lastPathComponent, "CrossOver (GPTK 4.0b2, DXMT 0.80, MoltenVK mvk-source).app")
+        // The name lists everything the app carries, not just what this run installed. The MoltenVK
+        // build's own name is deliberately absent: they are named after games, and this app is not
+        // for one game. The test fixture's build reports no version, so it is just "MoltenVK".
+        XCTAssertEqual(result.lastPathComponent, "CrossOver (GPTK 4.0b2, DXMT 0.80, MoltenVK).app")
         XCTAssertEqual(try CrossOverBundle(url: result).installedD3DMetalVersion, "4.0b2")
         XCTAssertTrue(try CrossOverBundle(url: result).hasPatchBackup, "the app must still be repairable")
         let json = try XCTUnwrap(JSONSerialization.jsonObject(
@@ -371,6 +373,23 @@ final class StabilityTests: XCTestCase {
         XCTAssertEqual((json["dlssAliases"] as? [String])?.isEmpty, false)
         XCTAssertEqual(json["dxmtVersion"] as? String, "0.80")
         XCTAssertNotNil(json["moltenVKBuild"])
+    }
+
+    func testKnownBuildsAreNamedByGameInTheMenuButNotInTheAppName() throws {
+        // Published builds are recognised however they were named on the way in.
+        let standard = MoltenVKLibrary.known(for: "MoltenVK-standard-v1.4.2")
+        XCTAssertEqual(standard?.games, "Doom (2016) · Wolfenstein II")
+        XCTAssertEqual(MoltenVKLibrary.known(for: "detroit")?.games, "Detroit: Become Human")
+        // "doometernal" contains "doom", so the longer name has to win.
+        XCTAssertEqual(MoltenVKLibrary.known(for: "MoltenVK-doometernal-main")?.games, "Doom Eternal")
+        // Someone's own file is left as it is, with no game claimed for it.
+        XCTAssertNil(MoltenVKLibrary.known(for: "libMoltenVK-experimental"))
+
+        // The app's name carries the version, never the game a build was made for.
+        XCTAssertEqual(PatchJob.components(gptk: "4.0b2", dxmt: nil, moltenVK: .some("1.4.3")),
+                       "GPTK 4.0b2, MoltenVK 1.4.3")
+        XCTAssertEqual(PatchJob.components(gptk: nil, dxmt: nil, moltenVK: .some(nil)), "MoltenVK")
+        XCTAssertEqual(PatchJob.components(gptk: nil, dxmt: nil, moltenVK: nil), "patched")
     }
 
     func testRepatchWithTheSameExtrasLeavesThemUntouched() throws {

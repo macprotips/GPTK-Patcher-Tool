@@ -79,7 +79,12 @@ enum PatchedAppRegistry {
         var found: [(String, String)] = []
         if let version = json["gptkD3DMetalVersion"] as? String { found.append(("Game Porting Toolkit", version)) }
         if let version = json["dxmtVersion"] as? String { found.append(("DXMT", version)) }
-        if let build = json["moltenVKBuild"] as? String { found.append(("MoltenVK", build)) }
+        if let build = json["moltenVKBuild"] as? String {
+            let known = MoltenVKLibrary.known(for: build)
+            let version = json["moltenVKVersion"] as? String
+            let parts = [known?.title ?? build, known?.games, version.map { "MoltenVK \($0)" }].compactMap { $0 }
+            found.append(("MoltenVK", parts.joined(separator: " · ")))
+        }
         return found
     }
 

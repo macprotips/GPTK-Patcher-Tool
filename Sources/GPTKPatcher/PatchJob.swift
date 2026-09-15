@@ -38,6 +38,7 @@ struct PatchReceipt: Codable {
     var dxmtVersion: String?
     var dxmtStock: String?
     var moltenVKBuild: String?
+    var moltenVKVersion: String?
     var moltenVKSlots: [String]?
     let environment: [String: String]
 }
@@ -274,6 +275,7 @@ struct PatchJob {
             dxmtVersion: request.dxmt?.version ?? previous?.dxmtVersion,
             dxmtStock: dxmtStock.map { String($0.path.dropFirst(dst.path.count + 1)) } ?? previous?.dxmtStock,
             moltenVKBuild: request.moltenVK?.name ?? previous?.moltenVKBuild,
+            moltenVKVersion: request.moltenVK?.version ?? previous?.moltenVKVersion,
             moltenVKSlots: (moltenVKSlots.isEmpty ? nil : moltenVKSlots) ?? previous?.moltenVKSlots,
             environment: Dictionary(uniqueKeysWithValues: request.graphics.assignments.compactMap { key, value in value.map { (key, $0) } }))
         let encoder = JSONEncoder()
@@ -371,18 +373,19 @@ struct PatchJob {
     /// What a patched app is named after: everything it carries, so a copy with a newer DXMT or a
     /// game's MoltenVK in it can be told apart from one with only a toolkit swapped.
     static func nameComponent(for receipt: PatchReceipt) -> String {
-        components(gptk: receipt.gptkD3DMetalVersion, dxmt: receipt.dxmtVersion, moltenVK: receipt.moltenVKBuild)
+        components(gptk: receipt.gptkD3DMetalVersion, dxmt: receipt.dxmtVersion,
+                   moltenVK: receipt.moltenVKBuild.map { _ in receipt.moltenVKVersion })
     }
 
     /// The same list, from what is about to be installed rather than from a receipt.
-    static func components(gptk: String?, dxmt: String?, moltenVK: String?) -> String {
+    static func components(gptk: String?, dxmt: String?, moltenVK: String??) -> String {
         var parts: [String] = []
         if let gptk { parts.append("GPTK \(gptk)") }
         if let dxmt { parts.append("DXMT \(dxmt)") }
         if let moltenVK {
-            // Build names come from whatever file was dropped in and can be long enough to make an
-            // unwieldy file name, so only short ones are spelled out.
-            parts.append(moltenVK.count <= 16 ? "MoltenVK \(moltenVK)" : "MoltenVK")
+            // The version, never the build's name: these builds are named after games, and a
+            // CrossOver called "Doom" would be wrong the moment it is used for something else.
+            parts.append(moltenVK.flatMap { $0.isEmpty ? nil : "MoltenVK \($0)" } ?? "MoltenVK")
         }
         return parts.isEmpty ? "patched" : parts.joined(separator: ", ")
     }
