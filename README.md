@@ -213,7 +213,8 @@ cancellation, not power loss or a force-killed process.
 
 ## Licensing
 
-MIT; see [LICENSE](LICENSE). That covers this project's code.
+MIT; see [LICENSE](LICENSE). That covers this project's code. Nearly everything it installs was
+written by someone else; [CREDITS](CREDITS.md) says who.
 
 Apple's Game Porting Toolkit is not included or redistributed here, and stays under Apple's terms.
 An imported toolkit keeps the licence, acknowledgements and read-me from its disk image in
