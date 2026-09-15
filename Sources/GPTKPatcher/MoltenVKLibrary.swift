@@ -31,7 +31,7 @@ struct MoltenVKBuild: Identifiable, Hashable, Sendable {
     /// One line for a menu entry: the build, then the games it is for.
     var menuTitle: String {
         guard let games = catalogue?.games else { return displayName }
-        return "\(displayName) — \(games)"
+        return "\(displayName), for \(games)"
     }
 }
 

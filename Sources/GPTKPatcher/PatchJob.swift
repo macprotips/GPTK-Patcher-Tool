@@ -454,8 +454,8 @@ struct PatchJob {
         try FileSafety.requireContained(stock, in: bundle)
 
         try Shell.check("/bin/chmod", ["-R", "u+w", dir.path], token: token)
-        // The job's backup holds this folder as it is right now — the stock DXMT, or the build an
-        // earlier patch installed — so any later failure puts that exact folder back rather than
+        // The job's backup holds this folder as it is right now, the stock DXMT or the build an
+        // earlier patch installed, so any later failure puts that exact folder back rather than
         // dropping to stock. Capturing the backup path too removes a stock copy made here.
         try backup.capture(dir)
         try backup.capture(stock)
@@ -515,8 +515,8 @@ struct PatchJob {
             }
             let stock = slot.appendingPathExtension("stock")
             try FileSafety.requireContained(stock, in: bundle)
-            // The job's backup holds what this slot has right now — the stock library, or the build
-            // an earlier patch put there — so a failure anywhere later puts that exact file back
+            // The job's backup holds what this slot has right now, the stock library or the build
+            // an earlier patch put there, so a failure anywhere later puts that exact file back
             // instead of dropping to stock. Capturing the .stock path too removes one made here.
             try backup.capture(slot)
             try backup.capture(stock)

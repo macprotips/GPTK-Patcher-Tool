@@ -8,8 +8,7 @@ installs was made by someone else, and the parts that were not are small. This i
 **CrossOver** is [CodeWeavers'](https://www.codeweavers.com) commercial product, built on
 [Wine](https://www.winehq.org). This tool modifies a copy you already own and is not supported by
 them. Their build of MoltenVK is also patched to advertise capabilities Metal does not have,
-which is the only reason several Vulkan games start at all — a detail that took a night of
-measurement to work out, and their work rather than ours.
+which is the only reason several Vulkan games start at all. Their work, not ours.
 
 **Apple's Game Porting Toolkit** is Apple's, under Apple's terms. Nothing from it is
 redistributed here; you supply your own copy and its licence travels with it.
@@ -23,7 +22,7 @@ Releases are downloaded by you, not by this tool.
 translates Vulkan to Metal. `scripts/build-moltenvk.sh` builds it with small changes, none of
 which are original:
 
-- **The capability flags** — `shaderCullDistance` and `depthBounds` — come from
+- **The capability flags**, `shaderCullDistance` and `depthBounds`, come from
   [squidbus](https://github.com/squidbus/MoltenVK)'s per-game branches (`doom`, `doometernal`).
   Metal has neither; the games refuse to create a device without them.
 - **`moltenvk/unbound-vertex-attributes.patch`** is squidbus's commit `97ac9f8`, which gives a
@@ -34,7 +33,7 @@ which are original:
 **Detroit: Become Human** is not built here. It needs
 [DiAvisoo/MoltenVK-Detroit](https://github.com/DiAvisoo/MoltenVK-Detroit), which builds on
 [alexdremov/MoltenVK](https://github.com/alexdremov/MoltenVK) and
-[alexdremov/SPIRV-Cross](https://github.com/alexdremov/SPIRV-Cross) — the fix needs the shader
+[alexdremov/SPIRV-Cross](https://github.com/alexdremov/SPIRV-Cross). The fix needs the shader
 compiler patched, not just the driver, and that work is theirs. The research behind it is in
 [KhronosGroup/MoltenVK#2054](https://github.com/KhronosGroup/MoltenVK/issues/2054), including
 aquadran's blending workaround and imagetasks's reports.
@@ -50,7 +49,7 @@ MoltenVK build widely used for Doom.
 
 ## This project
 
-The Swift app, its tests, the build script and the workflow are MIT — see [LICENSE](LICENSE).
+The Swift app, its tests, the build script and the workflow are MIT; see [LICENSE](LICENSE).
 What is genuinely new here is not the fixes but the assembly: taking changes that were stranded on
 forks dozens of commits behind upstream, applying them to a current MoltenVK, and making the
 result reproducible, licensed and installable without a build toolchain.

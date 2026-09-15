@@ -68,7 +68,7 @@ notarization, with credentials configured as described at the top of that script
    found automatically.
 3. Optionally drop a build on the **DXMT** or **MoltenVK** line to update DXMT in the same pass.
    Left alone, CrossOver's own DXMT and MoltenVK are untouched. Every menu lists *Unchanged*
-   alongside the imported builds, so any component can be set back to untouched — including the
+   alongside the imported builds, so any component can be set back to untouched, including the
    toolkit, to update only DXMT. At least one has to be chosen.
 4. Choose **Duplicate CrossOver** or **Patch Existing**.
 5. Click **Patch CrossOver**.
@@ -130,7 +130,7 @@ do not need to be changed.
   which the Detroit build needs for its cache.
 - Replaces `lib/dxmt` when a DXMT build is chosen, keeping the original as `dxmt.stock`.
   Upstream releases ship x86_64 and i386 only, so anything else the bundled build had is
-  carried over — CrossOver Preview's `aarch64` DXMT survives the swap.
+  carried over, so CrossOver Preview's `aarch64` DXMT survives the swap.
 - Leaves DXMT or MoltenVK untouched when the app already carries the build that is chosen, so
   re-patching an app to update only its toolkit does not disturb them.
 - Creates `nvngx.dll` and `nvngx.so` copies of the toolkit's `nvngx-on-metalfx` shim. CrossOver's
@@ -149,7 +149,7 @@ do not need to be changed.
 ## Vulkan games (Doom, Wolfenstein, Detroit)
 
 Doom (2016), Wolfenstein II: The New Colossus and Detroit: Become Human are Vulkan games, so
-neither the Game Porting Toolkit nor DXMT affects them — they go through **MoltenVK**, which
+neither the Game Porting Toolkit nor DXMT affects them. They go through **MoltenVK**, which
 CrossOver also bundles. The bundled one is too old to render them correctly, so this app installs
 a different one.
 
@@ -169,7 +169,7 @@ before either will start a Vulkan device, and no published build has both:
   but is old enough that the lighting shaders fail to compile, which is what a black screen is.
 
 **Detroit: Become Human needs a different build**, from
-[MoltenVK-Detroit](https://github.com/DiAvisoo/MoltenVK-Detroit/releases) — drop the `.zip` in as
+[MoltenVK-Detroit](https://github.com/DiAvisoo/MoltenVK-Detroit/releases). Drop the `.zip` in as
 it is. That game writes a `float4` into an integer colour attachment, which Metal refuses
 (`KhronosGroup/MoltenVK#2054`), and fixing it takes a patched SPIRV-Cross as well as a patched
 MoltenVK. `scripts/build-moltenvk.sh` does not carry that patch. Detroit also needs its own game
