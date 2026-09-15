@@ -71,6 +71,18 @@ enum PatchedAppRegistry {
         return apps
     }
 
+    /// What a patched app carries, read back from its receipt: the toolkit and whichever of the
+    /// other two were installed, so a result can say what is in it rather than only where it is.
+    static func components(at url: URL) -> [(name: String, detail: String)] {
+        guard let data = try? Data(contentsOf: url.appendingPathComponent(receiptPath)),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        var found: [(String, String)] = []
+        if let version = json["gptkD3DMetalVersion"] as? String { found.append(("Game Porting Toolkit", version)) }
+        if let version = json["dxmtVersion"] as? String { found.append(("DXMT", version)) }
+        if let build = json["moltenVKBuild"] as? String { found.append(("MoltenVK", build)) }
+        return found
+    }
+
     private static func read(_ url: URL) -> PatchedApp? {
         let receipt = url.appendingPathComponent(receiptPath)
         guard let data = try? Data(contentsOf: receipt),

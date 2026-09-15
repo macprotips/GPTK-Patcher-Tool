@@ -368,12 +368,23 @@ struct PatchJob {
         return finalURL
     }
 
-    /// What a patched app is named after: its toolkit, or the next component down when there is
-    /// no toolkit in it, so a DXMT- or MoltenVK-only patch is not labelled with a version it has not got.
+    /// What a patched app is named after: everything it carries, so a copy with a newer DXMT or a
+    /// game's MoltenVK in it can be told apart from one with only a toolkit swapped.
     static func nameComponent(for receipt: PatchReceipt) -> String {
-        if let version = receipt.gptkD3DMetalVersion { return "GPTK \(version)" }
-        if let version = receipt.dxmtVersion { return "DXMT \(version)" }
-        return "MoltenVK"
+        components(gptk: receipt.gptkD3DMetalVersion, dxmt: receipt.dxmtVersion, moltenVK: receipt.moltenVKBuild)
+    }
+
+    /// The same list, from what is about to be installed rather than from a receipt.
+    static func components(gptk: String?, dxmt: String?, moltenVK: String?) -> String {
+        var parts: [String] = []
+        if let gptk { parts.append("GPTK \(gptk)") }
+        if let dxmt { parts.append("DXMT \(dxmt)") }
+        if let moltenVK {
+            // Build names come from whatever file was dropped in and can be long enough to make an
+            // unwieldy file name, so only short ones are spelled out.
+            parts.append(moltenVK.count <= 16 ? "MoltenVK \(moltenVK)" : "MoltenVK")
+        }
+        return parts.isEmpty ? "patched" : parts.joined(separator: ", ")
     }
 
     /// The receipt this CrossOver already carries, if it was patched before.
