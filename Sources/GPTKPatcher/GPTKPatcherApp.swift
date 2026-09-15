@@ -68,7 +68,16 @@ enum HeadlessRunner {
         exit(0)
     }
 
-    private static let usage = "usage: GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version> [destination.app] [--in-place] [--replace] [--fps N] [--hud] [--no-copy-env] [--bottle NAME]...\n       GPTKPatcher --cli --repair <patched.app>\n       GPTKPatcher --cli --quit-bottle <name> | --bottle-status <name>\n"
+    private static let usage = """
+        usage: GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version | none> [destination.app]
+                   [--in-place] [--replace] [--dxmt ARCHIVE|VERSION] [--moltenvk FILE|NAME]
+                   [--fps N] [--hud] [--no-copy-env] [--bottle NAME]...
+               GPTKPatcher --cli --repair <patched.app>
+               GPTKPatcher --cli --quit-bottle <name> | --bottle-status <name>
+
+        Pass none as the toolkit to leave it alone and update only DXMT or MoltenVK.
+
+        """
 
     private static func fail(_ message: String, status: Int32 = 1) -> Never {
         FileHandle.standardError.write(Data("error: \(message)\n".utf8))
