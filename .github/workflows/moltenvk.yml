@@ -17,6 +17,9 @@ on:
 jobs:
   build:
     runs-on: macos-15
+    # Only to attach the finished libraries to a release.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
