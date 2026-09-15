@@ -183,6 +183,9 @@ tested**, because the game was not available to try it on.
 Keep a library per game and switch between them from the MoltenVK menu. These builds tell Metal it
 can do things it cannot, which suits one game and can upset another.
 
+The first launch after swapping the library shows a black screen for several minutes while the
+game compiles its shaders through Metal. Wait for it; later launches are quick.
+
 Steam games launch through Steam, not by running the executable: a Steam copy of Doom exits
 silently otherwise. Doom also wants `+r_renderAPI 1` so it starts in Vulkan rather than OpenGL.
 
