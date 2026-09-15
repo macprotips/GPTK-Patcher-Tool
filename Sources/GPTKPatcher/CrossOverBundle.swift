@@ -68,8 +68,14 @@ struct CrossOverBundle: Sendable {
     func requireNotRunning() throws {
         let active = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).contains { app in
             guard !app.isTerminated, let path = app.bundleURL else { return false }
-            return path.resolvingSymlinksInPath().standardizedFileURL == url.standardizedFileURL
-                || (path.path.contains("/AppTranslocation/") && path.lastPathComponent == url.lastPathComponent)
+            if path.resolvingSymlinksInPath().standardizedFileURL == url.standardizedFileURL { return true }
+            // A never-opened download runs from a hidden translocated copy, whose path is a random
+            // one and never matches. Such a copy is this app only if its build matches too:
+            // matching on the file name alone refuses to patch whenever any CrossOver of that name
+            // is running, including an unrelated one.
+            return path.path.contains("/AppTranslocation/")
+                && path.lastPathComponent == url.lastPathComponent
+                && (Bundle(url: path)?.infoDictionary?["CFBundleVersion"] as? String) == build
         }
         guard !active, !BottleEnv.isUsingApp(url) else {
             throw PatchError.io("Quit \(url.lastPathComponent) and its running games or bottles before changing it. Save your progress first.")
