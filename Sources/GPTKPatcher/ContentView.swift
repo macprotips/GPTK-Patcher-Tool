@@ -940,7 +940,7 @@ private struct MoltenVKRow: View {
                 set: { if let build = $0 { engine.selectMoltenVK(build) } else { engine.clearMoltenVK() } })) {
                     Text("Unchanged").tag(MoltenVKBuild?.none)
                     ForEach(engine.moltenVKBuilds) { build in
-                        Text(build.displayName).tag(Optional(build))
+                        Text(build.menuTitle).tag(Optional(build))
                     }
                 }
                 .pickerStyle(.inline)
