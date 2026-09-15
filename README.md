@@ -148,26 +148,43 @@ do not need to be changed.
 
 ## Vulkan games (Doom, Wolfenstein, Detroit)
 
-Doom, Wolfenstein and Detroit: Become Human are Vulkan games, so neither the Game Porting Toolkit
-nor DXMT affects them — they go through **MoltenVK**, which CrossOver also bundles. Community
-builds of MoltenVK fix each of them, and this app installs one for you.
+Doom (2016), Wolfenstein II: The New Colossus and Detroit: Become Human are Vulkan games, so
+neither the Game Porting Toolkit nor DXMT affects them — they go through **MoltenVK**, which
+CrossOver also bundles. The bundled one is too old to render them correctly, so this app installs
+a different one.
 
-Builds are not distributed here. Two that exist today:
+Nothing is distributed here. Build the library with `scripts/build-moltenvk.sh`, which needs Xcode:
 
-- **Doom 2016 / Doom Eternal**: `libMoltenVK-experimental.dylib` from
-  [Procyon](https://github.com/italomandara/Procyon/tree/main/Procyon/Libs). Reported to work for
-  Wolfenstein: The New Colossus as well.
-- **Detroit: Become Human**: [MoltenVK-Detroit](https://github.com/DiAvisoo/MoltenVK-Detroit/releases).
-  Drop the downloaded `.zip` straight in; there is no need to unpack it.
+```sh
+scripts/build-moltenvk.sh standard
+```
 
-Builds are game-specific. They make Metal report features it does not really have, which helps one
-game and can upset another, so keep one per game and switch between them rather than looking for a
-single build that does everything.
+That library covers **Doom 2016** and **Wolfenstein II**, both verified. Two things are needed
+before either will start a Vulkan device, and no published build has both:
 
-**Detroit needs more than this app does.** After patching, it still needs its own game fixes: set
-`"DEPTH_OF_FIELD": 0` in `GraphicOptions.JSON`, a one-byte edit to `DetroitBecomeHuman.exe`, and a
-first-run Metal shader cache build that requires the full Xcode. Follow the MoltenVK-Detroit
-instructions for those. Doom and Wolfenstein generally need only the build swapped in.
+- `shaderCullDistance` and `depthBounds`, which Metal does not have and these games insist on.
+  Upstream MoltenVK answers honestly and the game quits. The build advertises them; the limits
+  stay at zero, so nothing is promised beyond the capability itself.
+- The shader translation from a current MoltenVK. CrossOver's own build has the capability flags
+  but is old enough that the lighting shaders fail to compile, which is what a black screen is.
+
+**Detroit: Become Human needs a different build**, from
+[MoltenVK-Detroit](https://github.com/DiAvisoo/MoltenVK-Detroit/releases) — drop the `.zip` in as
+it is. That game writes a `float4` into an integer colour attachment, which Metal refuses
+(`KhronosGroup/MoltenVK#2054`), and fixing it takes a patched SPIRV-Cross as well as a patched
+MoltenVK. `scripts/build-moltenvk.sh` does not carry that patch. Detroit also needs its own game
+fixes after patching: `"DEPTH_OF_FIELD": 0` in `GraphicOptions.JSON`, a one-byte edit to
+`DetroitBecomeHuman.exe`, and a first-run Metal shader cache build. Follow the MoltenVK-Detroit
+instructions for those.
+
+The `doometernal` profile adds what Doom Eternal's own community build changes. **It has not been
+tested**, because the game was not available to try it on.
+
+Keep a library per game and switch between them from the MoltenVK menu. These builds tell Metal it
+can do things it cannot, which suits one game and can upset another.
+
+Steam games launch through Steam, not by running the executable: a Steam copy of Doom exits
+silently otherwise. Doom also wants `+r_renderAPI 1` so it starts in Vulkan rather than OpenGL.
 
 ## Compatibility
 
