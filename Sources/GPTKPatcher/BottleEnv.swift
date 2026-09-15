@@ -44,7 +44,7 @@ enum CXConfig {
         for (key, value) in assignments {
             guard key.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil,
                   value?.rangeOfCharacter(from: CharacterSet(charactersIn: "\"\\").union(.controlCharacters)) == nil else {
-                throw PatchError.io("Invalid CrossOver setting.")
+                throw PatchError.io("Cannot write the setting \(key) to \(conf.lastPathComponent): the name or value contains characters CrossOver's config format cannot hold.")
             }
             var lines = text.components(separatedBy: "\n")
             var headers: [Int] = []

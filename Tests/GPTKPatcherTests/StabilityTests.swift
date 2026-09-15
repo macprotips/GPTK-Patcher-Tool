@@ -78,6 +78,14 @@ final class StabilityTests: XCTestCase {
         return lib
     }
 
+    /// Packs a library build back into the kind of archive people download.
+    private func archive(of build: DXMTBuild) throws -> URL {
+        let out = root.appendingPathComponent("\(build.version).tar.gz")
+        try Shell.check("/usr/bin/tar", ["-czf", out.path, "-C", build.path.deletingLastPathComponent().path,
+                                         build.path.lastPathComponent])
+        return out
+    }
+
     private func dxmtDir(_ app: URL) -> URL {
         app.appendingPathComponent("Contents/SharedSupport/CrossOver/lib/dxmt")
     }
@@ -373,6 +381,33 @@ final class StabilityTests: XCTestCase {
         XCTAssertEqual((json["dlssAliases"] as? [String])?.isEmpty, false)
         XCTAssertEqual(json["dxmtVersion"] as? String, "0.80")
         XCTAssertNotNil(json["moltenVKBuild"])
+    }
+
+    @MainActor
+    func testChoosingUnchangedSurvivesARefreshAndRemovingABuildDoesNotPickAnother() async throws {
+        let (_, kit) = try fixture()
+        let engine = PatchEngine()
+        engine.toolkits = [kit]
+        engine.selectToolkit(kit)
+        XCTAssertNotNil(engine.selectedToolkit)
+
+        // Leaving the toolkit alone is a decision, not an absence of one.
+        engine.clearToolkit()
+        engine.refreshToolkits()
+        XCTAssertNil(engine.selectedToolkit, "a refresh must not undo Unchanged")
+        XCTAssertFalse(engine.hasSomethingToInstall)
+
+        // Removing the chosen DXMT build leaves DXMT unchanged rather than installing another.
+        let library = root.appendingPathComponent("dxmt-library")
+        let first = try dxmtBuild("0.80"), second = try dxmtBuild("0.81")
+        for build in [first, second] {
+            _ = try DXMTLibrary.importArchive(try archive(of: build), directory: library) { _ in }
+        }
+        engine.dxmtBuilds = DXMTLibrary.list(directory: library)
+        XCTAssertEqual(engine.dxmtBuilds.count, 2)
+        engine.selectDXMT(try XCTUnwrap(engine.dxmtBuilds.first { $0.version == "0.81" }))
+        engine.removeDXMT(try XCTUnwrap(engine.dxmtBuilds.first { $0.version == "0.81" }))
+        XCTAssertNil(engine.selectedDXMT, "removing the chosen build must not select a different one")
     }
 
     func testKnownBuildsAreNamedByGameInTheMenuButNotInTheAppName() throws {

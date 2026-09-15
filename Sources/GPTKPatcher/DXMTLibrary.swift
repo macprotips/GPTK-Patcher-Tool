@@ -61,6 +61,10 @@ enum DXMTLibrary {
     /// A version already in the library is returned as-is.
     static func importArchive(_ archive: URL, directory: URL = Self.directory, token: CancellationToken? = nil,
                               log: (String) -> Void) throws -> DXMTBuild {
+        // Serialised with patches and with the other libraries: two processes unpacking into the
+        // same folder at once would leave a half-written build behind.
+        let lock = try OperationLock()
+        defer { lock.unlock() }
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
         let unpack = directory.appendingPathComponent(".unpacking", isDirectory: true)
