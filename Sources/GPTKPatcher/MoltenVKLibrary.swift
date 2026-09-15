@@ -13,18 +13,51 @@ struct MoltenVKBuild: Identifiable, Hashable, Sendable {
 
     var id: String { name }
     var dylib: URL { path.appendingPathComponent(MoltenVKLibrary.dylibName) }
-    var displayName: String { name }
+    /// The builds this project publishes are recognised by name so the menu can say which games
+    /// they are for. Anything else is a file someone supplied and keeps the name it came with.
+    var catalogue: MoltenVKLibrary.KnownBuild? { MoltenVKLibrary.known(for: name) }
+
+    var displayName: String { catalogue?.title ?? name }
+
+    /// What the build is and what it is for, for the menu and the row underneath it.
     var detail: String {
         var parts: [String] = []
+        if let games = catalogue?.games { parts.append(games) }
         if let version { parts.append("MoltenVK \(version)") }
         parts.append(architectures.joined(separator: " + "))
         return parts.joined(separator: " · ")
+    }
+
+    /// One line for a menu entry: the build, then the games it is for.
+    var menuTitle: String {
+        guard let games = catalogue?.games else { return displayName }
+        return "\(displayName) — \(games)"
     }
 }
 
 /// Keeps imported builds in ~/Library/Application Support/GPTKPatcher/MoltenVK/<name>/.
 enum MoltenVKLibrary {
     static let dylibName = "libMoltenVK.dylib"
+
+    /// A build this project publishes, and the games it was made for. These are capability
+    /// changes aimed at particular games, so which game matters more than the version number.
+    struct KnownBuild {
+        let title: String
+        let games: String
+    }
+
+    /// Matched loosely, because a build keeps the name of the file or folder it arrived in and
+    /// ours are published as MoltenVK-standard-v1.4.2 and the like.
+    static func known(for name: String) -> KnownBuild? {
+        let lower = name.lowercased()
+        // Checked longest first: "doometernal" also contains "doom".
+        let catalogue: [(key: String, build: KnownBuild)] = [
+            ("doometernal", KnownBuild(title: "Doom Eternal build", games: "Doom Eternal")),
+            ("detroit", KnownBuild(title: "Detroit build", games: "Detroit: Become Human")),
+            ("standard", KnownBuild(title: "Standard build", games: "Doom (2016) · Wolfenstein II"))
+        ]
+        return catalogue.first { lower.contains($0.key) }?.build
+    }
 
     static var directory: URL {
         FileManager.default.homeDirectoryForCurrentUser
