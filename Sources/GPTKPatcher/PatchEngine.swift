@@ -197,20 +197,28 @@ final class PatchEngine {
         toolkits = ToolkitLibrary.list()
         if let selected = selectedToolkit, let match = toolkits.first(where: { $0.version == selected.version }) {
             selectedToolkit = match
-        } else {
+        } else if !leavingToolkitAlone {
+            // Nothing chosen yet: start on the newest toolkit, since replacing it is the usual case.
+            // "Unchanged" is a decision, though, and a refresh must not quietly undo it.
             selectedToolkit = toolkits.first
         }
         if toolkits.isEmpty, case .ok = toolkitStatus { toolkitStatus = .empty }
     }
 
-    /// Leaves the toolkit in the library but takes it out of this patch, so only DXMT is replaced.
+    /// Set when the toolkit is deliberately left alone, so a refresh does not choose one again.
+    private var leavingToolkitAlone = false
+
+    /// Leaves the toolkit in the library but takes it out of this patch, so only the other
+    /// components are replaced.
     func clearToolkit() {
+        leavingToolkitAlone = true
         selectedToolkit = nil
         toolkitStatus = .empty
     }
 
     func selectToolkit(_ toolkit: Toolkit) {
         guard !isBusy else { return }
+        leavingToolkitAlone = false
         selectedToolkit = toolkit
         toolkitStatus = .ok(toolkit.version)
     }
@@ -222,6 +230,7 @@ final class PatchEngine {
         importToken = token
         isCancelling = false
         importingImage = url
+        leavingToolkitAlone = false
         toolkitStatus = .checking("Adding to the library…")
         if case .cancelled = phase { phase = .idle }
         Task.detached(priority: .userInitiated) {
@@ -283,14 +292,17 @@ final class PatchEngine {
 
     /// Unpacks the archive into the library, then selects it.
     func importDXMT(from url: URL) {
+        guard !isBusy else { return }
+        let importing = CancellationToken()
+        importToken = importing
         importingDXMT = url
         dxmtStatus = .checking("Adding to the library…")
         if case .cancelled = phase { phase = .idle }
-        let token = CancellationToken()
         Task.detached(priority: .userInitiated) {
-            let result: Result<DXMTBuild, Error> = Result { try DXMTLibrary.importArchive(url, token: token) { _ in } }
+            let result: Result<DXMTBuild, Error> = Result { try DXMTLibrary.importArchive(url, token: importing) { _ in } }
             await MainActor.run {
                 guard self.importingDXMT == url else { return }
+                self.importToken = nil
                 self.importingDXMT = nil
                 switch result {
                 case .success(let build):
@@ -304,10 +316,13 @@ final class PatchEngine {
         }
     }
 
+    /// Removing the chosen build leaves DXMT unchanged rather than quietly choosing another one:
+    /// the next patch would otherwise install something nobody picked.
     func removeDXMT(_ build: DXMTBuild) {
+        guard !isBusy else { return }
         try? DXMTLibrary.remove(build)
         dxmtBuilds = DXMTLibrary.list()
-        if selectedDXMT?.version == build.version { selectedDXMT = dxmtBuilds.first }
+        if selectedDXMT?.version == build.version { selectedDXMT = nil }
         dxmtStatus = selectedDXMT.map { .ok($0.version) } ?? .empty
     }
 
@@ -336,14 +351,17 @@ final class PatchEngine {
     }
 
     func importMoltenVK(from url: URL) {
+        guard !isBusy else { return }
+        let importing = CancellationToken()
+        importToken = importing
         importingMoltenVK = url
         moltenVKStatus = .checking("Adding to the library…")
         if case .cancelled = phase { phase = .idle }
-        let token = CancellationToken()
         Task.detached(priority: .userInitiated) {
-            let result: Result<MoltenVKBuild, Error> = Result { try MoltenVKLibrary.importBuild(url, token: token) { _ in } }
+            let result: Result<MoltenVKBuild, Error> = Result { try MoltenVKLibrary.importBuild(url, token: importing) { _ in } }
             await MainActor.run {
                 guard self.importingMoltenVK == url else { return }
+                self.importToken = nil
                 self.importingMoltenVK = nil
                 switch result {
                 case .success(let build):
@@ -357,10 +375,12 @@ final class PatchEngine {
         }
     }
 
+    /// As with DXMT: removing the chosen build leaves MoltenVK unchanged.
     func removeMoltenVK(_ build: MoltenVKBuild) {
+        guard !isBusy else { return }
         try? MoltenVKLibrary.remove(build)
         moltenVKBuilds = MoltenVKLibrary.list()
-        if selectedMoltenVK?.name == build.name { selectedMoltenVK = moltenVKBuilds.first }
+        if selectedMoltenVK?.name == build.name { selectedMoltenVK = nil }
         moltenVKStatus = selectedMoltenVK.map { .ok($0.name) } ?? .empty
     }
 
