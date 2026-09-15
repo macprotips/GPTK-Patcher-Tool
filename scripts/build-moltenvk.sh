@@ -44,6 +44,31 @@ patches="$(cd "$(dirname "$0")/../moltenvk" && pwd)"
 
 
 command -v xcodebuild >/dev/null || { echo "Xcode is required to build MoltenVK." >&2; exit 1; }
+
+# The SDK is as much an input as the MoltenVK ref. Metal capabilities are settled at compile time,
+# so a library built against an older SDK reports an older GPU family on the same Mac and
+# advertises fewer Vulkan features; Doom then fails vkCreateDevice with FEATURE_NOT_PRESENT.
+# MoltenVK cannot report Metal 4 or MSL 4.0 unless it was built against the macOS 26 SDK or newer.
+sdk="$(xcrun --show-sdk-version)"
+sdk_major="${sdk%%.*}"
+min_sdk_major=26
+# Ask the compiler that will do the building, not just the command line tools: this is the exact
+# macro MoltenVK gates on, so it cannot disagree with what the build sees.
+sdk_macro="$(printf '#include <Availability.h>\n__MAC_OS_X_VERSION_MAX_ALLOWED\n' \
+    | xcrun clang -E -xc - 2>/dev/null | tail -1 | tr -d '[:space:]')"
+case "$sdk_macro" in
+    ''|*[!0-9]*) ;;                                  # unreadable: fall back to the version string
+    *) [ "$sdk_macro" -lt $((min_sdk_major * 10000)) ] && sdk_major=0 ;;
+esac
+if [ "${sdk_major:-0}" -lt "$min_sdk_major" ]; then
+    cat >&2 <<END
+This Xcode builds against the macOS ${sdk} SDK, and ${min_sdk_major} or newer is needed.
+A library built here would report Metal 3 on a Metal 4 Mac and would not start some games.
+Current Xcode: $(xcodebuild -version | head -1) at $(xcode-select -p)
+Select a newer one with: sudo xcode-select -s /Applications/Xcode_26.app
+END
+    exit 1
+fi
 work="$(mktemp -d)/MoltenVK"
 trap 'rm -rf "$(dirname "$work")"' EXIT
 
@@ -96,9 +121,22 @@ echo "Building…"
 target="$out/MoltenVK-$profile-$ref"
 mkdir -p "$target"
 cp "$work/Package/Latest/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib" "$target/"
+
+# What the library says about itself, rather than what the toolchain claimed before building.
+# Every architecture slice is checked: a fat library is only as good as its worst half.
+built_sdks="$(otool -l "$target/libMoltenVK.dylib" \
+    | awk '/LC_BUILD_VERSION/ {found=1} found && $1 == "sdk" {print $2; found=0}' | sort -u)"
+[ -n "$built_sdks" ] || { echo "The built library records no SDK at all. Refusing to ship it." >&2; exit 1; }
+for recorded in $built_sdks; do
+    if [ "${recorded%%.*}" -lt "$min_sdk_major" ]; then
+        echo "A slice of the built library records SDK ${recorded}, older than ${min_sdk_major}. Refusing to ship it." >&2
+        exit 1
+    fi
+done
+built_sdk="$(echo "$built_sdks" | tr '\n' ' ' | sed 's/ $//')"
 cp "$work/LICENSE" "$target/LICENSE"
 cat > "$target/NOTICE.txt" <<NOTE
-MoltenVK $ref (commit $commit), modified.
+MoltenVK $ref (commit $commit), modified. Built against the macOS $built_sdk SDK.
 
 Built from https://github.com/KhronosGroup/MoltenVK with the "$profile" changes described in
 scripts/build-moltenvk.sh: capability flags that Doom, Wolfenstein II and Doom Eternal require
