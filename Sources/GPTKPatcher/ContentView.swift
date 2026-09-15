@@ -113,10 +113,10 @@ struct ContentView: View {
                 ToolkitTile(engine: engine)
             }
 
-            if engine.crossOverInstructions == nil && engine.compatibilityIssue == nil && !engine.isImporting {
-                DXMTRow(engine: engine).padding(.top, 14)
-                MoltenVKRow(engine: engine).padding(.top, 10)
-            }
+            // Always shown. These carry choices of their own, and hiding them behind a warning
+            // about CrossOver or the toolkit takes a chosen build off the screen.
+            DXMTRow(engine: engine).padding(.top, 14)
+            MoltenVKRow(engine: engine).padding(.top, 10)
 
             if let instructions = engine.crossOverInstructions {
                 Label {
