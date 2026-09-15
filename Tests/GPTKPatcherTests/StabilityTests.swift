@@ -744,11 +744,11 @@ final class StabilityTests: XCTestCase {
              "sourceCrossOverVersion": "26.2", "gptkD3DMetalVersion": "4.0b2", "dxmtVersion": "0.80",
              "moltenVKBuild": "standard", "environment": {}}
             """.utf8).write(to: patched.appendingPathComponent(PatchedAppRegistry.receiptPath))
-        let states: [(String, Phase)] = [("ready", .idle), ("advanced", .idle), ("signing", .running(.signing)), ("error", .failed(failure)), ("success", .done(patched)), ("first-launch", .idle)]
+        let states: [(String, Phase)] = [("ready", .idle), ("with-builds", .idle), ("signing", .running(.signing)), ("error", .failed(failure)), ("success", .done(patched)), ("first-launch", .idle)]
         for (name, phase) in states {
             engine.phase = phase
-            // The Advanced disclosure opens itself when a MoltenVK build is already chosen.
-            if name == "advanced" {
+            // The extra rows always show, so this case is ready with both builds chosen.
+            if name == "with-builds" {
                 engine.selectedDXMT = try dxmtBuild("0.80")
                 engine.selectMoltenVK(try moltenVKBuild())
             }
