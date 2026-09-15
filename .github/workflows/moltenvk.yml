@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [idtech6, idtech7, detroit]
+        profile: [standard, doometernal]
     steps:
       - uses: actions/checkout@v4
 
