@@ -16,8 +16,8 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(.bottom, isChoosing ? 22 : 26)
-            if isChoosing { modePicker.padding(.bottom, 22) }
+                .padding(.bottom, isChoosing ? 26 : 30)
+            if isChoosing { modePicker.padding(.bottom, 26) }
 
             Group {
                 switch engine.phase {
@@ -31,8 +31,8 @@ struct ContentView: View {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: engine.phase)
         }
         .padding(.horizontal, 30)
-        .padding(.top, 26)
-        .padding(.bottom, 22)
+        .padding(.top, 30)
+        .padding(.bottom, 26)
         .frame(width: width)
         .fixedSize(horizontal: false, vertical: true)
         .background(GeometryReader { proxy in
@@ -114,8 +114,8 @@ struct ContentView: View {
             }
 
             if engine.crossOverInstructions == nil && engine.compatibilityIssue == nil && !engine.isImporting {
-                DXMTRow(engine: engine).padding(.top, 10)
-                advancedSection.padding(.top, 16)
+                DXMTRow(engine: engine).padding(.top, 14)
+                advancedSection.padding(.top, 20)
             }
 
             if let instructions = engine.crossOverInstructions {
@@ -145,15 +145,15 @@ struct ContentView: View {
             }
 
             if engine.mode == .copy {
-                destinationRow.padding(.top, 18)
+                destinationRow.padding(.top, 26)
             }
 
             if showsOutputSection {
-                if engine.mode == .copy { Divider().padding(.vertical, 14) }
-                outputSection.padding(.top, engine.mode == .copy ? 0 : 24)
+                if engine.mode == .copy { Divider().padding(.vertical, 15) }
+                outputSection.padding(.top, engine.mode == .copy ? 0 : 28)
             }
 
-            actionBar.padding(.top, 18)
+            actionBar.padding(.top, 24)
         }
     }
 
@@ -164,7 +164,7 @@ struct ContentView: View {
     private var showsOutputSection: Bool { showsPlannedOutput || !engine.patchedApps.isEmpty }
 
     private var outputSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             SectionLabel(showsPlannedOutput ? "Output" : "Patched")
             ScrollView {
               VStack(spacing: 0) {
@@ -188,7 +188,7 @@ struct ContentView: View {
     /// Everything past the usual two components lives here, closed by default so the window stays
     /// short. It opens itself when one of its settings is already in use.
     private var advancedSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Button {
                 // Not animated: the window follows the content height, and a height that is still
                 // animating settles a few points short of where the content actually ends up.
@@ -219,7 +219,7 @@ struct ContentView: View {
     }
 
     private var destinationRow: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             SectionLabel("Save patched copy to")
             HStack(spacing: 10) {
                 Image(systemName: "folder")
@@ -350,12 +350,33 @@ struct ContentView: View {
                 .lineLimit(2)
                 .truncationMode(.middle)
                 .padding(.top, 2)
+            let carried = PatchedAppRegistry.components(at: url)
+            if !carried.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(carried, id: \.name) { item in
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.green)
+                            Text(item.name)
+                                .foregroundStyle(.secondary)
+                            Text(item.detail)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer(minLength: 0)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+                .font(.subheadline)
+                .padding(.top, 16)
+            }
             Text(engine.mode == .copy
                  ? "Open it like any other app. Your original CrossOver was not changed."
                  : "The stock toolkit was kept as apple_gptk.stock inside the app.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .padding(.top, 12)
+                .padding(.top, 16)
             HStack {
                 Button("Details…") { showLog = true }
                 Spacer()
