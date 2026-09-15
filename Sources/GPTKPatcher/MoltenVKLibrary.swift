@@ -105,6 +105,10 @@ enum MoltenVKLibrary {
     /// Copies the library out of a `.dylib` or archive and into the app's own store.
     static func importBuild(_ source: URL, directory: URL = Self.directory, token: CancellationToken? = nil,
                             log: (String) -> Void) throws -> MoltenVKBuild {
+        // Serialised with patches and with the other libraries: two processes unpacking into the
+        // same folder at once would leave a half-written build behind.
+        let lock = try OperationLock()
+        defer { lock.unlock() }
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
         let unpack = directory.appendingPathComponent(".unpacking", isDirectory: true)
