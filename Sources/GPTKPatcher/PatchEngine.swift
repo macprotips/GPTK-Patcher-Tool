@@ -105,9 +105,9 @@ final class PatchEngine {
 
     /// The name the copy will get. Never replaces anything: if the name is taken, a counter is added.
     var outputName: String {
-        let component = gptkVersion.map { "GPTK \($0)" }
-            ?? selectedDXMT.map { "DXMT \($0.version)" }
-            ?? (selectedMoltenVK != nil ? "MoltenVK" : "GPTK …")
+        let component = hasSomethingToInstall
+            ? PatchJob.components(gptk: gptkVersion, dxmt: selectedDXMT?.version, moltenVK: selectedMoltenVK?.name)
+            : "GPTK …"
         let base = "\(crossOver?.name ?? "CrossOver") (\(component))"
         var candidate = base + ".app"
         var n = 2

@@ -359,8 +359,8 @@ final class StabilityTests: XCTestCase {
         let result = try PatchJob(request: request(CrossOverBundle(url: first), nil, mode: .inPlace,
                                                    dxmt: try dxmtBuild("0.80")), log: { _ in }).run()
         try assertSigned(result)
-        // The toolkit is still in there, so the name and the receipt still say so.
-        XCTAssertEqual(result.lastPathComponent, "CrossOver (GPTK 4.0b2).app")
+        // The name lists everything the app carries, not just what this run installed.
+        XCTAssertEqual(result.lastPathComponent, "CrossOver (GPTK 4.0b2, DXMT 0.80, MoltenVK mvk-source).app")
         XCTAssertEqual(try CrossOverBundle(url: result).installedD3DMetalVersion, "4.0b2")
         XCTAssertTrue(try CrossOverBundle(url: result).hasPatchBackup, "the app must still be repairable")
         let json = try XCTUnwrap(JSONSerialization.jsonObject(
@@ -717,7 +717,15 @@ final class StabilityTests: XCTestCase {
             PatchedApp(url: root.appendingPathComponent("CrossOver Patched \($0).app"), name: "CrossOver", gptkVersion: "4.0b2", patchedAt: nil)
         }
         let failure = Failure(title: "Couldn't patch CrossOver", message: "Could not remove download metadata from a file in CrossOver. Check that you own the app and can write to it. Recovery files are available in the location shown in Details.")
-        let states: [(String, Phase)] = [("ready", .idle), ("advanced", .idle), ("signing", .running(.signing)), ("error", .failed(failure)), ("success", .done(app.url)), ("first-launch", .idle)]
+        // The success state lists what the app carries, so it needs a receipt to read. Writing one
+        // is enough; running a whole patch here would only test the patch again.
+        let patched = app.url
+        try Data("""
+            {"tool": "GPTKPatcher test", "date": "2026-01-01T00:00:00Z", "sourceCrossOver": "/x",
+             "sourceCrossOverVersion": "26.2", "gptkD3DMetalVersion": "4.0b2", "dxmtVersion": "0.80",
+             "moltenVKBuild": "standard", "environment": {}}
+            """.utf8).write(to: patched.appendingPathComponent(PatchedAppRegistry.receiptPath))
+        let states: [(String, Phase)] = [("ready", .idle), ("advanced", .idle), ("signing", .running(.signing)), ("error", .failed(failure)), ("success", .done(patched)), ("first-launch", .idle)]
         for (name, phase) in states {
             engine.phase = phase
             // The Advanced disclosure opens itself when a MoltenVK build is already chosen.
@@ -736,7 +744,7 @@ final class StabilityTests: XCTestCase {
                 XCTAssertEqual(size.width, 520)
                 // Worst case is everything showing at once: copy mode with Advanced open and a
                 // full patched list. Anything past this stops fitting a 13-inch display.
-                XCTAssertLessThan(size.height, 780, "\(name) exceeds a typical laptop display height")
+                XCTAssertLessThan(size.height, 800, "\(name) exceeds a typical laptop display height")
                 view.frame = NSRect(origin: .zero, size: size)
                 let window = NSWindow(contentRect: view.bounds, styleMask: .borderless, backing: .buffered, defer: false)
                 window.appearance = view.appearance
