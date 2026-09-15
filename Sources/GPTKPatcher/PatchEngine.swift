@@ -43,9 +43,6 @@ final class PatchEngine {
     var selectedMoltenVK: MoltenVKBuild?
     var importingMoltenVK: URL?
     var moltenVKStatus: DropStatus = .empty
-    /// The Advanced disclosure, kept here so it stays open across view rebuilds and opens itself
-    /// when one of the settings it holds is already in use.
-    var showsAdvanced = false
 
     var dxmtBuilds: [DXMTBuild] = []
     var selectedDXMT: DXMTBuild?
@@ -325,7 +322,6 @@ final class PatchEngine {
 
     func refreshMoltenVK() {
         moltenVKBuilds = MoltenVKLibrary.list()
-        if selectedMoltenVK != nil { showsAdvanced = true }
         if let selected = selectedMoltenVK, let match = moltenVKBuilds.first(where: { $0.name == selected.name }) {
             selectedMoltenVK = match
         } else if selectedMoltenVK != nil {
@@ -335,7 +331,6 @@ final class PatchEngine {
     }
 
     func selectMoltenVK(_ build: MoltenVKBuild) {
-        showsAdvanced = true
         selectedMoltenVK = build
         moltenVKStatus = .ok(build.name)
     }

@@ -115,7 +115,7 @@ struct ContentView: View {
 
             if engine.crossOverInstructions == nil && engine.compatibilityIssue == nil && !engine.isImporting {
                 DXMTRow(engine: engine).padding(.top, 14)
-                advancedSection.padding(.top, 20)
+                MoltenVKRow(engine: engine).padding(.top, 10)
             }
 
             if let instructions = engine.crossOverInstructions {
@@ -182,39 +182,6 @@ struct ContentView: View {
             }
             .frame(height: CGFloat(min(engine.patchedApps.count + (showsPlannedOutput ? 1 : 0), 3)) * 54)
             .modifier(InputTileChrome(targeted: false, isEmpty: false, isError: false, cornerRadius: 10))
-        }
-    }
-
-    /// Everything past the usual two components lives here, closed by default so the window stays
-    /// short. It opens itself when one of its settings is already in use.
-    private var advancedSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button {
-                // Not animated: the window follows the content height, and a height that is still
-                // animating settles a few points short of where the content actually ends up.
-                engine.showsAdvanced.toggle()
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .rotationEffect(.degrees(engine.showsAdvanced ? 90 : 0))
-                    Text("Advanced")
-                    // Nothing in here is hidden state: what it holds is named while it is closed.
-                    if !engine.showsAdvanced, let build = engine.selectedMoltenVK {
-                        Text("· MoltenVK \u{201C}\(build.displayName)\u{201D}")
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Advanced options")
-            .accessibilityValue(engine.showsAdvanced ? "expanded" : "collapsed")
-
-            if engine.showsAdvanced { MoltenVKRow(engine: engine) }
         }
     }
 
@@ -561,7 +528,7 @@ private struct WindowConfigurator: NSViewRepresentable {
 
 /// Environment-variable hooks for screenshots and testing. They do nothing unless set.
 ///   GPTKPATCHER_CROSSOVER=<path>  GPTKPATCHER_DMG=<path>  GPTKPATCHER_OUTPUT=<folder>
-///   GPTKPATCHER_PASTE=1  GPTKPATCHER_AUTOPATCH=1  GPTKPATCHER_OPEN_SETTINGS=1  GPTKPATCHER_SKIP_NOTICE=1  GPTKPATCHER_ADVANCED=1
+///   GPTKPATCHER_PASTE=1  GPTKPATCHER_AUTOPATCH=1  GPTKPATCHER_OPEN_SETTINGS=1  GPTKPATCHER_SKIP_NOTICE=1
 ///   GPTKPATCHER_APPEARANCE=light|dark
 enum DebugHooks {
     @MainActor
@@ -573,7 +540,6 @@ enum DebugHooks {
         }
         if let path = env["GPTKPATCHER_CROSSOVER"] { engine.setCrossOver(URL(fileURLWithPath: path)) }
         if env["GPTKPATCHER_PASTE"] == "1" { engine.pasteFromPasteboard() }
-        if env["GPTKPATCHER_ADVANCED"] == "1" { engine.showsAdvanced = true }
         if let path = env["GPTKPATCHER_OUTPUT"] { engine.useTemporaryOutputFolder(URL(fileURLWithPath: path)) }
         if let path = env["GPTKPATCHER_DMG"] {
             engine.importToolkit(from: URL(fileURLWithPath: path))
