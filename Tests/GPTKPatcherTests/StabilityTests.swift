@@ -410,6 +410,38 @@ final class StabilityTests: XCTestCase {
         XCTAssertNil(engine.selectedDXMT, "removing the chosen build must not select a different one")
     }
 
+    func testTheBundledBuildIsOfferedAndCannotBeRemoved() throws {
+        // A build packaged with the app, as scripts/build-app.sh puts it in Contents/Resources.
+        let builtInRoot = root.appendingPathComponent("Resources/MoltenVK", isDirectory: true)
+        let standard = builtInRoot.appendingPathComponent("standard", isDirectory: true)
+        try fm.createDirectory(at: standard, withIntermediateDirectories: true)
+        try fm.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"),
+                        to: standard.appendingPathComponent(MoltenVKLibrary.dylibName))
+
+        let empty = root.appendingPathComponent("no-builds-added", isDirectory: true)
+        try fm.createDirectory(at: empty, withIntermediateDirectories: true)
+        let offered = MoltenVKLibrary.all(directory: empty, builtInRoot: builtInRoot)
+        XCTAssertEqual(offered.count, 1, "the packaged build has to be there with nothing added")
+        let build = try XCTUnwrap(offered.first)
+        XCTAssertTrue(build.isBuiltIn)
+        XCTAssertEqual(build.displayName, "Standard build")
+        XCTAssertTrue(build.detail.contains("included with this app"))
+
+        // It lives in the app bundle, so removing it must do nothing rather than delete it.
+        try MoltenVKLibrary.remove(build)
+        XCTAssertTrue(fm.fileExists(atPath: standard.appendingPathComponent(MoltenVKLibrary.dylibName).path))
+
+        // Someone's own build of the same name wins, since they chose it deliberately.
+        let added = root.appendingPathComponent("added-library", isDirectory: true)
+        let source = root.appendingPathComponent("standard/libMoltenVK.dylib")
+        try fm.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: source)
+        _ = try MoltenVKLibrary.importBuild(source, directory: added) { _ in }
+        let merged = MoltenVKLibrary.all(directory: added, builtInRoot: builtInRoot)
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged.first?.isBuiltIn, false)
+    }
+
     func testKnownBuildsAreNamedByGameInTheMenuButNotInTheAppName() throws {
         // Published builds are recognised however they were named on the way in.
         let standard = MoltenVKLibrary.known(for: "MoltenVK-standard-v1.4.2")

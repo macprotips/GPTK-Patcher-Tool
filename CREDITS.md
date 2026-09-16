@@ -47,6 +47,17 @@ most of the fix. The r/macgaming thread that started this project pointed at Met
 frame-rate cap. [italomandara/Procyon](https://github.com/italomandara/Procyon) publishes a
 MoltenVK build widely used for Doom.
 
+## What ships inside the app
+
+The app packages one MoltenVK library, built by `scripts/build-moltenvk.sh standard` from Khronos'
+source with squidbus's changes described above. Apache-2.0 allows that; the licence and a notice
+naming the upstream commit, the modifications and the SDK it was built against ship beside the
+library inside the app bundle, in Contents/Resources/MoltenVK. It is not an official MoltenVK
+build and the Khronos Group does not support it.
+
+Nothing else is redistributed. Apple's toolkit, DXMT releases and the Detroit build stay with
+their own projects and you supply them yourself.
+
 ## This project
 
 The Swift app, its tests, the build script and the workflow are MIT; see [LICENSE](LICENSE).
