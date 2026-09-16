@@ -806,6 +806,7 @@ private struct ExtraRow<MenuItems: View>: View {
     private func row<Value: View>(@ViewBuilder _ value: () -> Value) -> some View {
         HStack(spacing: 8) {
             SectionLabel(label)
+            BetaTag()
             HStack(spacing: 4) { value() }
             Spacer(minLength: 4)
         }
@@ -915,7 +916,10 @@ private struct MoltenVKRow: View {
             Button("Add MoltenVK Build…", action: openPanel)
             if let build = engine.selectedMoltenVK {
                 Text(build.detail)
-                Button("Remove \(build.displayName) from Library", role: .destructive) { engine.removeMoltenVK(build) }
+                // A build that ships with the app is not the user's to remove.
+                if !build.isBuiltIn {
+                    Button("Remove \(build.displayName) from Library", role: .destructive) { engine.removeMoltenVK(build) }
+                }
             }
         }
     }
@@ -932,5 +936,20 @@ private struct MoltenVKRow: View {
             }
             engine.importMoltenVK(from: url)
         }
+    }
+}
+
+
+/// Both optional components replace a translation layer CrossOver relies on, and both have been
+/// tried on far fewer machines than the toolkit swap has.
+private struct BetaTag: View {
+    var body: some View {
+        Text("beta")
+            .font(.system(size: 9, weight: .semibold))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Color.secondary.opacity(0.18)))
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("beta")
     }
 }
