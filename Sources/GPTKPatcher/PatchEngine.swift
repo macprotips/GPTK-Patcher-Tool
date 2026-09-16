@@ -336,7 +336,7 @@ final class PatchEngine {
     // MARK: MoltenVK library
 
     func refreshMoltenVK() {
-        moltenVKBuilds = MoltenVKLibrary.list()
+        moltenVKBuilds = MoltenVKLibrary.all()
         if let selected = selectedMoltenVK, let match = moltenVKBuilds.first(where: { $0.name == selected.name }) {
             selectedMoltenVK = match
         } else if selectedMoltenVK != nil {
@@ -365,7 +365,7 @@ final class PatchEngine {
                 self.importingMoltenVK = nil
                 switch result {
                 case .success(let build):
-                    self.moltenVKBuilds = MoltenVKLibrary.list()
+                    self.moltenVKBuilds = MoltenVKLibrary.all()
                     self.selectedMoltenVK = self.moltenVKBuilds.first { $0.name == build.name } ?? build
                     self.moltenVKStatus = .ok(build.name)
                 case .failure(let error):
@@ -379,7 +379,7 @@ final class PatchEngine {
     func removeMoltenVK(_ build: MoltenVKBuild) {
         guard !isBusy else { return }
         try? MoltenVKLibrary.remove(build)
-        moltenVKBuilds = MoltenVKLibrary.list()
+        moltenVKBuilds = MoltenVKLibrary.all()
         if selectedMoltenVK?.name == build.name { selectedMoltenVK = nil }
         moltenVKStatus = selectedMoltenVK.map { .ok($0.name) } ?? .empty
     }
