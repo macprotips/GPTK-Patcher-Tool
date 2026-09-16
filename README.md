@@ -4,6 +4,10 @@ CrossOver ships with a build of Apple's Game Porting Toolkit, and a build of DXM
 either with a newer one, in a duplicate of CrossOver or in the installed app, and sets up
 DLSS → MetalFX.
 
+DXMT and MoltenVK support is **beta**. Both replace a translation layer CrossOver relies on, both
+have been verified on one Mac rather than many, and a MoltenVK build is a capability change aimed
+at particular games. Patch a duplicate rather than your installed CrossOver while trying them.
+
 ## Requirements
 
 - macOS 14 or later, Apple Silicon.
@@ -153,7 +157,9 @@ neither the Game Porting Toolkit nor DXMT affects them. They go through **Molten
 CrossOver also bundles. The bundled one is too old to render them correctly, so this app installs
 a different one.
 
-Nothing is distributed here. Build the library with `scripts/build-moltenvk.sh`, which needs Xcode:
+The app ships with the **standard** build already, so Doom and Wolfenstein need nothing further.
+To build it yourself, or to build the others, use `scripts/build-moltenvk.sh`, which needs Xcode
+and refuses to build against an SDK older than macOS 26:
 
 ```sh
 scripts/build-moltenvk.sh standard

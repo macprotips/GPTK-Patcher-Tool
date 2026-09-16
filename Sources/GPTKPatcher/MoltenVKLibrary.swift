@@ -10,6 +10,8 @@ struct MoltenVKBuild: Identifiable, Hashable, Sendable {
     let path: URL
     let architectures: [String]
     let importedAt: Date
+    /// Shipped inside this app rather than added by someone. Cannot be removed from the menu.
+    var isBuiltIn = false
 
     var id: String { name }
     var dylib: URL { path.appendingPathComponent(MoltenVKLibrary.dylibName) }
@@ -25,6 +27,7 @@ struct MoltenVKBuild: Identifiable, Hashable, Sendable {
         if let games = catalogue?.games { parts.append(games) }
         if let version { parts.append("MoltenVK \(version)") }
         parts.append(architectures.joined(separator: " + "))
+        parts.append(origin)
         return parts.joined(separator: " · ")
     }
 
@@ -33,6 +36,9 @@ struct MoltenVKBuild: Identifiable, Hashable, Sendable {
         guard let games = catalogue?.games else { return displayName }
         return "\(displayName), for \(games)"
     }
+
+    /// Spelled out in the row under the menu, where there is room for it.
+    var origin: String { isBuiltIn ? "included with this app" : "added by you" }
 }
 
 /// Keeps imported builds in ~/Library/Application Support/GPTKPatcher/MoltenVK/<name>/.
@@ -81,6 +87,30 @@ enum MoltenVKLibrary {
 
     static func isValid(_ folder: URL) -> Bool {
         FileManager.default.fileExists(atPath: folder.appendingPathComponent(dylibName).path)
+    }
+
+    /// Builds packaged with the app, so a working library is there without anyone finding one.
+    /// Read-only: they live in the app bundle and are offered alongside whatever has been added.
+    static func builtIn(root: URL? = Bundle.main.resourceURL?.appendingPathComponent("MoltenVK", isDirectory: true)) -> [MoltenVKBuild] {
+        guard let root, let names = try? FileManager.default.contentsOfDirectory(atPath: root.path) else { return [] }
+        return names.sorted().compactMap { name -> MoltenVKBuild? in
+            guard !name.hasPrefix(".") else { return nil }
+            let path = root.appendingPathComponent(name, isDirectory: true)
+            guard isValid(path) else { return nil }
+            let dylib = path.appendingPathComponent(dylibName)
+            return MoltenVKBuild(name: name, version: version(of: dylib), path: path,
+                                 architectures: architectures(of: dylib), importedAt: .distantPast,
+                                 isBuiltIn: true)
+        }
+    }
+
+    /// Everything the menu offers: what ships with the app, then what has been added. A build
+    /// someone added under the same name wins, since they chose it deliberately.
+    static func all(directory: URL = Self.directory,
+                    builtInRoot: URL? = Bundle.main.resourceURL?.appendingPathComponent("MoltenVK", isDirectory: true)) -> [MoltenVKBuild] {
+        let added = list(directory: directory)
+        let addedNames = Set(added.map(\.name))
+        return added + builtIn(root: builtInRoot).filter { !addedNames.contains($0.name) }
     }
 
     static func list(directory: URL = Self.directory) -> [MoltenVKBuild] {
@@ -168,7 +198,8 @@ enum MoltenVKLibrary {
     }
 
     static func remove(_ build: MoltenVKBuild) throws {
-        guard build.path.path.hasPrefix(directory.path) else { return }
+        // Built-in builds live in the app bundle; the path check below already refuses them.
+        guard !build.isBuiltIn, build.path.path.hasPrefix(directory.path) else { return }
         try FileManager.default.removeItem(at: build.path)
     }
 
