@@ -44,8 +44,9 @@ aquadran's blending workaround and imagetasks's reports.
 from, and its links to the Detroit and Doom builds are what made the shape of the problem clear.
 Truwa's Doom video supplied the launch options and the observation that an updated MoltenVK is
 most of the fix. The r/macgaming thread that started this project pointed at MetalFX and the
-frame-rate cap. [italomandara/Procyon](https://github.com/italomandara/Procyon) publishes a
-MoltenVK build widely used for Doom.
+frame-rate cap. [italomandara/Procyon](https://github.com/italomandara/Procyon) publishes the
+MoltenVK build most people try first; testing it is how we learned that a build can fake enough
+capabilities to start one game and still lack the flag another needs.
 
 ## What ships inside the app
 
