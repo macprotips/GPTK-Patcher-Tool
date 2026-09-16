@@ -14,6 +14,13 @@ APP="build/GPTK Patcher Tool.app"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 
 echo "Signing with ${IDENTITY}..."
+# Nested code first: a library inside Resources is signed in its own right, and notarization
+# rejects the whole app if it is not, with its own hardened runtime and secure timestamp.
+find "$APP/Contents/Resources" -name '*.dylib' -print0 2>/dev/null |
+    while IFS= read -r -d '' lib; do
+        echo "  $(basename "$(dirname "$lib")")/$(basename "$lib")"
+        codesign --force --options runtime --timestamp --sign "$IDENTITY" "$lib"
+    done
 codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 

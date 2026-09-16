@@ -38,5 +38,9 @@ else
     echo "No MoltenVK build to package. Run scripts/build-moltenvk.sh standard first, or set MOLTENVK_BUNDLE." >&2
 fi
 
+# Nested code is signed first, as the notarized release build does, so the local app is put
+# together the same way.
+find "$APP/Contents/Resources" -name '*.dylib' -print0 2>/dev/null |
+    while IFS= read -r -d '' lib; do codesign --force --sign - "$lib"; done
 codesign --force --sign - "$APP" >/dev/null
 echo "Built $APP"
