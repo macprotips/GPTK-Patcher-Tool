@@ -65,6 +65,14 @@ struct CrossOverBundle: Sendable {
         return executable
     }
 
+    private enum AppUsers {
+        case some([String]), none, unknown
+        init(active: Bool, found: [String]?) {
+            guard let found else { self = active ? .some([]) : .unknown; return }
+            if active || !found.isEmpty { self = .some(found) } else { self = .none }
+        }
+    }
+
     func requireNotRunning() throws {
         let active = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).contains { app in
             guard !app.isTerminated, let path = app.bundleURL else { return false }
@@ -77,8 +85,17 @@ struct CrossOverBundle: Sendable {
                 && path.lastPathComponent == url.lastPathComponent
                 && (Bundle(url: path)?.infoDictionary?["CFBundleVersion"] as? String) == build
         }
-        guard !active, !BottleEnv.isUsingApp(url) else {
-            throw PatchError.io("Quit \(url.lastPathComponent) and its running games or bottles before changing it. Save your progress first.")
+        let names = AppUsers(active: active, found: BottleEnv.processesUsingApp(url))
+        switch names {
+        case .none: return
+        case .unknown:
+            throw PatchError.io("Couldn't check whether \(url.lastPathComponent) is running, so nothing was changed. Quit it and any games or bottles it opened, then try again.")
+        case .some(let running):
+            // Naming them matters: "quit CrossOver" is no help when what is holding the app is a
+            // background program left behind by a bottle.
+            let list = running.isEmpty ? "" : " Still running: " + running.prefix(4).joined(separator: ", ")
+                + (running.count > 4 ? ", and \(running.count - 4) more." : ".")
+            throw PatchError.io("Quit \(url.lastPathComponent) and its running games or bottles before changing it. Save your progress first.\(list)")
         }
     }
 

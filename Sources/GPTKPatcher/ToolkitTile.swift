@@ -74,11 +74,13 @@ struct ToolkitTile: View {
                 .accessibilityLabel("Toolkit version")
                 .accessibilityValue(engine.selectedToolkit?.displayName ?? "none")
                 if let toolkit = engine.selectedToolkit {
-                    Text(targeted ? "Release to add this image to the library" : detail(for: toolkit))
+                    let caption = targeted ? "Release to add this image to the library" : detail(for: toolkit)
+                    Text(caption)
                         .font(.caption)
                         .foregroundStyle(targeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
+                        .help(caption)
                 } else {
                     Text("This CrossOver keeps its own toolkit")
                         .font(.caption)
@@ -124,7 +126,7 @@ struct ToolkitTile: View {
 
     private func detail(for toolkit: Toolkit) -> String {
         var lines = ["D3DMetal \(D3DMetalInfo.read(inLib: toolkit.lib).version ?? toolkit.version)"]
-        if let minimum = toolkit.minimumOS { lines.append("Requires macOS \(minimum)+") }
+        if let minimum = toolkit.minimumOS { lines.append("macOS \(minimum)+") }
         if toolkit.importedAt > .distantPast { lines.append("Added \(toolkit.importedAt.formatted(Self.dateFormat))") }
         return lines.joined(separator: "\n")
     }
