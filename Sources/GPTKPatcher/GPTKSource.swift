@@ -125,6 +125,15 @@ enum GPTKSource {
     }
 }
 
+enum D3DMetalVersion {
+    /// Compares D3DMetal version strings such as "3.0", "4.0b2" and "4.0b3". Numeric comparison
+    /// orders the beta suffixes correctly, and anything unparseable compares equal rather than
+    /// guessing.
+    static func isOlder(_ candidate: String, than installed: String) -> Bool {
+        candidate.compare(installed, options: .numeric) == .orderedAscending
+    }
+}
+
 enum D3DMetalInfo {
     /// Reads the D3DMetal framework version (and its minimum macOS) from a GPTK `lib` folder.
     static func read(inLib lib: URL) -> (version: String?, minimumOS: String?) {

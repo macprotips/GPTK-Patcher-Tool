@@ -118,8 +118,12 @@ final class StabilityTests: XCTestCase {
     }
 
     private func request(_ app: CrossOverBundle, _ kit: Toolkit?, mode: PatchMode = .copy,
-                         dxmt: DXMTBuild? = nil, moltenVK: MoltenVKBuild? = nil, bottles: [BottleEnv.Bottle] = []) -> PatchRequest {
-        PatchRequest(crossOver: app, toolkit: kit, dxmt: dxmt, moltenVK: moltenVK, mode: mode, destination: root.appendingPathComponent("Patched.app"),
+                         dxmt: DXMTBuild? = nil, moltenVK: MoltenVKBuild? = nil,
+                         renameInPlace: Bool = true,
+                         bottles: [BottleEnv.Bottle] = []) -> PatchRequest {
+        PatchRequest(crossOver: app, toolkit: kit, dxmt: dxmt, moltenVK: moltenVK,
+                     mode: mode, renameInPlace: renameInPlace,
+                     destination: root.appendingPathComponent("Patched.app"),
                      applicationsFolder: root.appendingPathComponent("Applications"), replaceExisting: false,
                      graphics: GraphicsSettings(fpsCap: 120, metalHUD: true), bottles: bottles)
     }
@@ -440,6 +444,118 @@ final class StabilityTests: XCTestCase {
         let merged = MoltenVKLibrary.all(directory: added, builtInRoot: builtInRoot)
         XCTAssertEqual(merged.count, 1)
         XCTAssertEqual(merged.first?.isBuiltIn, false)
+    }
+
+    func testAnInPlacePatchCanKeepItsNameAndPath() throws {
+        let (app, kit) = try fixture()
+        let result = try PatchJob(request: request(app, kit, mode: .inPlace, renameInPlace: false),
+                                  log: { _ in }).run()
+
+        XCTAssertEqual(result.lastPathComponent, "CrossOver.app", "the name it had is the name it keeps")
+        // An app outside Applications is still moved there, as it was before: that is about where
+        // CrossOver belongs, not about what it is called.
+        XCTAssertEqual(result.deletingLastPathComponent().standardizedFileURL,
+                       root.appendingPathComponent("Applications").standardizedFileURL)
+        // Keeping the name must not cost anything else: the patch, the backup and the receipt are
+        // all as they would be with a rename.
+        let patched = try CrossOverBundle(url: result)
+        XCTAssertEqual(patched.installedD3DMetalVersion, "4.0b2")
+        XCTAssertTrue(patched.hasPatchBackup)
+        let recorded = try XCTUnwrap(PatchedAppRegistry.read(result))
+        XCTAssertEqual(recorded.gptkVersion, "4.0b2")
+        XCTAssertFalse(recorded.patchReplaced)
+        try assertSigned(result)
+    }
+
+    func testPatchingAgainInPlaceWithoutRenamingStillFindsItsOwnPatch() throws {
+        let (app, kit) = try fixture()
+        let first = try PatchJob(request: request(app, kit, mode: .inPlace, renameInPlace: false),
+                                 log: { _ in }).run()
+        var lines: [String] = []
+        let again = try PatchJob(request: request(CrossOverBundle(url: first), kit, mode: .inPlace,
+                                                  renameInPlace: false),
+                                 log: { lines.append($0) }).run()
+        XCTAssertEqual(again.standardizedFileURL, first.standardizedFileURL,
+                       "the second patch leaves it exactly where the first did")
+        XCTAssertEqual(try CrossOverBundle(url: again).installedD3DMetalVersion, "4.0b2")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: try Data(contentsOf: again.appendingPathComponent(PatchedAppRegistry.receiptPath))) as? [String: Any])
+        // The stock D3DMetal recorded first time is carried forward rather than being replaced by
+        // the 4.0b2 this copy now has, which is what makes it repairable.
+        XCTAssertEqual(json["stockD3DMetalVersion"] as? String, "3.0")
+    }
+
+    func testACrossOverUpdateThatReplacedThePatchIsNoticed() throws {
+        let (app, kit) = try fixture()
+        let result = try PatchJob(request: request(app, kit), log: { _ in }).run()
+        let patched = try XCTUnwrap(PatchedAppRegistry.read(result))
+        XCTAssertEqual(patched.gptkVersion, "4.0b2")
+        XCTAssertFalse(patched.patchReplaced, "a patch that is still in place reads as intact")
+
+        // What a CrossOver update does: the bundle's own D3DMetal is back, the receipt is not.
+        let info = try CrossOverBundle(url: result).gptkDirectory()
+            .appendingPathComponent("external/D3DMetal.framework/Versions/A/Resources/Info.plist")
+        try plist(["CFBundleShortVersionString": "3.0", "LSMinimumSystemVersion": "14.0"], at: info)
+        let after = try XCTUnwrap(PatchedAppRegistry.read(result))
+        XCTAssertTrue(after.patchReplaced, "the receipt says 4.0b2 and the app has 3.0")
+    }
+
+    func testACopyWithNoToolkitRecordedIsNeverCalledReplaced() throws {
+        // A DXMT-only or MoltenVK-only patch records no toolkit, so there is nothing to compare
+        // and the app must not accuse CrossOver of having eaten it.
+        let (app, _) = try fixture()
+        let result = try PatchJob(request: request(app, nil, dxmt: try dxmtBuild("0.80")), log: { _ in }).run()
+        let patched = try XCTUnwrap(PatchedAppRegistry.read(result))
+        XCTAssertFalse(patched.patchReplaced)
+    }
+
+    func testAnOlderToolkitIsRecognisedAsADowngrade() {
+        XCTAssertTrue(D3DMetalVersion.isOlder("4.0b2", than: "4.0b3"))
+        XCTAssertTrue(D3DMetalVersion.isOlder("3.0", than: "4.0b2"))
+        XCTAssertTrue(D3DMetalVersion.isOlder("4.0b1", than: "4.0b2"))
+        XCTAssertFalse(D3DMetalVersion.isOlder("4.0b3", than: "4.0b2"))
+        XCTAssertFalse(D3DMetalVersion.isOlder("4.0b2", than: "4.0b2"), "the same build is not a downgrade")
+        XCTAssertFalse(D3DMetalVersion.isOlder("4.1", than: "4.0b3"))
+    }
+
+    @MainActor
+    func testTheFormWarnsWhenTheChosenToolkitIsOlderThanWhatIsInstalled() throws {
+        // The fixture CrossOver ships D3DMetal 3.0; the library offers an older 2.0.
+        let (app, kit) = try fixture()
+        let older = root.appendingPathComponent("older-toolkit")
+        try payload(at: older, version: "2.0")
+        let engine = PatchEngine()
+        engine.setCrossOver(app.url)
+        engine.selectToolkit(Toolkit(version: "2.0", lib: older, importedAt: Date(), minimumOS: "14.0", sourceName: nil))
+        let notice = try XCTUnwrap(engine.downgradeNotice)
+        XCTAssertTrue(notice.contains("2.0") && notice.contains("3.0"), notice)
+
+        // A newer toolkit is not a downgrade.
+        engine.selectToolkit(kit)
+        XCTAssertNil(engine.downgradeNotice)
+    }
+
+    func testTheReceiptRecordsAVersionAPersonWouldRecognise() throws {
+        let (app, kit) = try fixture()
+        let result = try PatchJob(request: request(app, kit), log: { _ in }).run()
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: try Data(contentsOf: result.appendingPathComponent(PatchedAppRegistry.receiptPath))) as? [String: Any])
+        // The fixture is not a Preview build, so its short version is the one to record.
+        XCTAssertEqual(json["sourceCrossOverVersion"] as? String, "26.2")
+    }
+
+    func testTheCopyIsNamedAfterTheGamesItWasSetUpFor() throws {
+        XCTAssertEqual(PatchJob.components(gptk: nil, dxmt: nil, moltenVK: .some("1.4.3"),
+                                           games: PatchJob.games(moltenVKBuild: "MoltenVK-standard-v1.4.3")),
+                       "MoltenVK 1.4.3, DOOM + Wolf")
+        // A build nobody recognises names no game, and neither does a plain toolkit swap.
+        XCTAssertEqual(PatchJob.components(gptk: "4.0b2", dxmt: "0.80", moltenVK: .some("1.4.3"),
+                                           games: PatchJob.games(moltenVKBuild: "my-own-build")),
+                       "GPTK 4.0b2, DXMT 0.80, MoltenVK 1.4.3")
+        // Nothing in a name may be a path separator.
+        for tag in PatchJob.games(moltenVKBuild: "MoltenVK-standard-v1.4.3") {
+            XCTAssertFalse(PatchJob.components(gptk: nil, dxmt: nil, moltenVK: nil, games: [tag]).contains("/"))
+        }
     }
 
     func testKnownBuildsAreNamedByGameInTheMenuButNotInTheAppName() throws {
@@ -827,10 +943,11 @@ final class StabilityTests: XCTestCase {
                 let view = NSHostingView(rootView: ContentView(engine: engine, loadsData: false).environment(\.colorScheme, scheme))
                 view.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
                 let size = view.fittingSize
-                XCTAssertEqual(size.width, 520)
-                // Worst case is everything showing at once: copy mode with Advanced open and a
-                // full patched list. Anything past this stops fitting a 13-inch display.
-                XCTAssertLessThan(size.height, 800, "\(name) exceeds a typical laptop display height")
+                XCTAssertEqual(size.width, 760)
+                // Worst case is everything showing at once: copy mode with a full patched list.
+                // The floor is a 13-inch Mac at its default 1440x900, which leaves about 847
+                // points of window height under the menu bar and title bar.
+XCTAssertLessThan(size.height, 840, "\(name) exceeds a typical laptop display height")
                 view.frame = NSRect(origin: .zero, size: size)
                 let window = NSWindow(contentRect: view.bounds, styleMask: .borderless, backing: .buffered, defer: false)
                 window.appearance = view.appearance

@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// icon, name and validation line. Drag-over, hover, error and checking states are all on this view.
 struct FileTile: View {
     let label: String
+    var beta = false
     let prompt: String
     let contentType: UTType
     let fileExtension: String
@@ -21,7 +22,10 @@ struct FileTile: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SectionLabel(label)
+            HStack(spacing: 6) {
+                SectionLabel(label)
+                if beta { BetaTag() }
+            }
             tile
         }
     }
@@ -86,6 +90,9 @@ struct FileTile: View {
                         .foregroundStyle(detail.isError ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
                         .lineLimit(3)
                         .fixedSize(horizontal: false, vertical: true)
+                        // The tile is a fixed height, so anything past three lines is only
+                        // reachable on hover. Never let a message have nowhere to be read.
+                        .help(detail.text)
                 }
             }
             Spacer(minLength: 0)

@@ -14,6 +14,9 @@ struct PatchRequest: Sendable {
     /// Optional: also replace the CrossOver's bundled MoltenVK with this build.
     var moltenVK: MoltenVKBuild?
     let mode: PatchMode
+    /// Whether an in-place patch renames the app after what it carries. Off keeps the path that
+    /// aliases, Dock entries, launchers and existing bottle sessions already point at.
+    var renameInPlace = true
     /// Where the copy goes (`.copy` mode). For `.inPlace` this is the source app itself.
     let destination: URL
     /// Applications folder an in-place patched app is moved into when it lives somewhere like Downloads.
@@ -261,23 +264,47 @@ struct PatchJob {
         //    the receipt has to describe the app as it now is, not just this one run.
         onStep(.finalizing)
         try token.checkpoint()
+        // Worked out first: one expression with this many fallbacks takes the type checker
+        // longer than it is willing to spend.
+        let stockVersion = outerStockBackup.map { D3DMetalInfo.read(inLib: $0).version }
+            ?? previous?.stockD3DMetalVersion ?? src.installedD3DMetalVersion
+        let relativeGptkDir: String? = outerGptkDir.map { String($0.path.dropFirst(dst.path.count + 1)) }
+            ?? previous?.gptkDirectory
+        let relativeStock: String? = outerStockBackup.map { String($0.path.dropFirst(dst.path.count + 1)) }
+            ?? previous?.stockBackup
+        let relativeDXMTStock: String? = dxmtStock.map { String($0.path.dropFirst(dst.path.count + 1)) }
+            ?? previous?.dxmtStock
+        let carriedSlots: [String]? = (moltenVKSlots.isEmpty ? nil : moltenVKSlots) ?? previous?.moltenVKSlots
+        // Worked out here rather than at step 6, so the receipt records what was actually written.
+        var settings = request.graphics
+        if request.moltenVK != nil { settings.moltenVKSettings = true }
+        let environment = Dictionary(uniqueKeysWithValues:
+            settings.assignments.compactMap { key, value in value.map { (key, $0) } })
+        let toolkitSource: String? = request.toolkit?.sourceName ?? previous?.toolkitSource
+        let toolkitPath: String? = request.toolkit?.lib.path ?? previous?.toolkitPath
+        let gptkVersion: String? = installedVersion ?? previous?.gptkD3DMetalVersion
+        let carriedAliases: [String] = aliases.isEmpty ? (previous?.dlssAliases ?? []) : aliases
+        let dxmtVersion: String? = request.dxmt?.version ?? previous?.dxmtVersion
+        let moltenVKName: String? = request.moltenVK?.name ?? previous?.moltenVKBuild
+        let moltenVKVersion: String? = request.moltenVK?.version ?? previous?.moltenVKVersion
         let receipt = PatchReceipt(
             tool: "GPTKPatcher " + Self.toolVersion, date: Date(),
-            sourceCrossOver: src.url.path, sourceCrossOverVersion: src.version,
-            stockD3DMetalVersion: outerStockBackup.map { D3DMetalInfo.read(inLib: $0).version }
-                ?? previous?.stockD3DMetalVersion ?? src.installedD3DMetalVersion,
-            toolkitSource: request.toolkit?.sourceName ?? previous?.toolkitSource,
-            toolkitPath: request.toolkit?.lib.path ?? previous?.toolkitPath,
-            gptkD3DMetalVersion: installedVersion ?? previous?.gptkD3DMetalVersion,
-            gptkDirectory: outerGptkDir.map { String($0.path.dropFirst(dst.path.count + 1)) } ?? previous?.gptkDirectory,
-            stockBackup: outerStockBackup.map { String($0.path.dropFirst(dst.path.count + 1)) } ?? previous?.stockBackup,
-            dlssAliases: aliases.isEmpty ? (previous?.dlssAliases ?? []) : aliases,
-            dxmtVersion: request.dxmt?.version ?? previous?.dxmtVersion,
-            dxmtStock: dxmtStock.map { String($0.path.dropFirst(dst.path.count + 1)) } ?? previous?.dxmtStock,
-            moltenVKBuild: request.moltenVK?.name ?? previous?.moltenVKBuild,
-            moltenVKVersion: request.moltenVK?.version ?? previous?.moltenVKVersion,
-            moltenVKSlots: (moltenVKSlots.isEmpty ? nil : moltenVKSlots) ?? previous?.moltenVKSlots,
-            environment: Dictionary(uniqueKeysWithValues: request.graphics.assignments.compactMap { key, value in value.map { (key, $0) } }))
+            // Preview builds put a date in CFBundleShortVersionString and the real version in
+            // CFBundleVersion, so record what the app shows rather than the raw short string.
+            sourceCrossOver: src.url.path, sourceCrossOverVersion: src.isPreview ? src.build : src.version,
+            stockD3DMetalVersion: stockVersion,
+            toolkitSource: toolkitSource,
+            toolkitPath: toolkitPath,
+            gptkD3DMetalVersion: gptkVersion,
+            gptkDirectory: relativeGptkDir,
+            stockBackup: relativeStock,
+            dlssAliases: carriedAliases,
+            dxmtVersion: dxmtVersion,
+            dxmtStock: relativeDXMTStock,
+            moltenVKBuild: moltenVKName,
+            moltenVKVersion: moltenVKVersion,
+            moltenVKSlots: carriedSlots,
+            environment: environment)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
@@ -288,8 +315,6 @@ struct PatchJob {
         try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: dst.path)
 
         // 6. Environment: app-wide in the copy's etc/CrossOver.conf, then per bottle on top.
-        var settings = request.graphics
-        if request.moltenVK != nil { settings.moltenVKSettings = true }
         if settings.storeInCopy {
             let conf = copy.globalConfig
             try FileSafety.requireContained(conf, in: dst)
@@ -326,7 +351,9 @@ struct PatchJob {
         //    helpers find it by bundle identifier, so the rename is safe; a taken name is left alone.
         //    Preflight requires its bottle sessions to be stopped before files or paths change.
         var finalURL = dst
-        if request.mode == .inPlace {
+        if request.mode == .inPlace, !request.renameInPlace {
+            log("Kept the name \(dst.lastPathComponent): renaming would change the path aliases and bottle sessions point at.")
+        } else if request.mode == .inPlace {
             let wanted = "\(src.name) (\(Self.nameComponent(for: receipt))).app"
             let target = dst.deletingLastPathComponent().appendingPathComponent(wanted)
             if dst.lastPathComponent == wanted {
@@ -374,19 +401,28 @@ struct PatchJob {
     /// game's MoltenVK in it can be told apart from one with only a toolkit swapped.
     static func nameComponent(for receipt: PatchReceipt) -> String {
         components(gptk: receipt.gptkD3DMetalVersion, dxmt: receipt.dxmtVersion,
-                   moltenVK: receipt.moltenVKBuild.map { _ in receipt.moltenVKVersion })
+                   moltenVK: receipt.moltenVKBuild.map { _ in receipt.moltenVKVersion },
+                   games: games(moltenVKBuild: receipt.moltenVKBuild))
+    }
+
+    /// The games a copy was set up for, for its name. A MoltenVK build nobody recognises
+    /// contributes nothing.
+    static func games(moltenVKBuild: String?) -> [String] {
+        [moltenVKBuild.flatMap { MoltenVKLibrary.known(for: $0)?.tag }].compactMap { $0 }
     }
 
     /// The same list, from what is about to be installed rather than from a receipt.
-    static func components(gptk: String?, dxmt: String?, moltenVK: String??) -> String {
+    static func components(gptk: String?, dxmt: String?, moltenVK: String??, games: [String] = []) -> String {
         var parts: [String] = []
         if let gptk { parts.append("GPTK \(gptk)") }
         if let dxmt { parts.append("DXMT \(dxmt)") }
         if let moltenVK {
-            // The version, never the build's name: these builds are named after games, and a
-            // CrossOver called "Doom" would be wrong the moment it is used for something else.
+            // The version, never the build's own name, which is a file name nobody chose.
             parts.append(moltenVK.flatMap { $0.isEmpty ? nil : "MoltenVK \($0)" } ?? "MoltenVK")
         }
+        // The games a change was made for, so a copy set up for one game is not mistaken for a
+        // general one. The name has to survive being a file name, so no slashes or colons.
+        parts += games.map { $0.replacingOccurrences(of: "/", with: " ") }
         return parts.isEmpty ? "patched" : parts.joined(separator: ", ")
     }
 

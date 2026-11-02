@@ -70,12 +70,14 @@ notarization, with credentials configured as described at the top of that script
    Files can also be dropped on the app icon, pasted with ⌘V, or picked with a file chooser. The
    full `Game_Porting_Toolkit_x.dmg` works directly; the evaluation-environment image inside it is
    found automatically.
-3. Optionally drop a build on the **DXMT** or **MoltenVK** line to update DXMT in the same pass.
-   Left alone, CrossOver's own DXMT and MoltenVK are untouched. Every menu lists *Unchanged*
-   alongside the imported builds, so any component can be set back to untouched, including the
-   toolkit, to update only DXMT. At least one has to be chosen.
-4. Choose **Duplicate CrossOver** or **Patch Existing**.
-5. Click **Patch CrossOver**.
+3. Optionally drop a DXMT release on the third tile to update DXMT in the same pass. Left alone,
+   CrossOver's own DXMT is untouched. Every menu lists *Unchanged* alongside the imported builds,
+   so any component can be set back to untouched, including the toolkit, to update only DXMT. At
+   least one has to be chosen.
+4. Optionally choose a **MoltenVK** build on the Beta line, which runs Vulkan games. Left alone,
+   CrossOver's own is untouched, and a build can be dropped straight onto the line.
+5. Choose **Duplicate CrossOver** or **Patch Existing**.
+6. Click **Patch CrossOver**.
 
 The patcher checks macOS's first-launch approval marker when you drop, paste, or choose CrossOver.
 If the download is still awaiting approval, it refuses the selection and asks you to launch it,
@@ -86,7 +88,7 @@ macOS does not provide a complete launch history for every copied or unquarantin
 Imported toolkits are kept in `~/Library/Application Support/GPTKPatcher/Toolkits/<version>/` and
 DXMT builds in `.../GPTKPatcher/DXMT/<version>/`, each picked from its own menu.
 
-Patched apps appear in the **Patched** list. *Reveal in Finder* shows the app; the gear sets the
+Patched apps appear in the **Already Patched** list. *Reveal in Finder* shows the app; the gear sets the
 frame rate cap, the Metal Performance HUD and Metal 4. One cap covers both translation layers: it
 writes `D3DM_MAX_FPS` for D3DMetal games and `d3d11.preferredMaxFrameRate` in `DXMT_CONFIG` for
 DXMT games, keeping any other DXMT option already set there. DXMT wants a factor of the display's
@@ -112,8 +114,23 @@ do not need to be changed.
 
 - **Duplicate:** APFS-clones CrossOver and saves it as `CrossOver (GPTK x).app` in `/Applications`,
   or `~/Applications` if that is not writable. A taken name gets a counter; nothing is replaced.
+- Names the copy after what went into it, including the game when a choice was made for one:
+  `CrossOver (GPTK 4.0b2, MoltenVK 1.4.3, DOOM + Wolf).app`, or `CrossOver (GPTK 4.0b2, Black
+  Flag).app`. A MoltenVK build the app does not recognise names no game, and neither does a plain
+  toolkit swap.
 - **Patch Existing:** modifies the selected app and refuses while it or its Wine programs are
-  running. Quit those sessions yourself before patching. Afterwards the app is renamed to `CrossOver (GPTK x).app` unless that
+  running. **Rename it to show what it carries** is off by default here: the app keeps its current
+  name and path, which is what aliases, the Dock, launchers and existing bottle sessions point at.
+  Turn it on to get the `CrossOver (GPTK x).app` naming that duplicates use. An app patched outside
+  Applications is still moved there either way, which is where CrossOver asks to live anyway.
+  Prefer Duplicate unless you have a reason not to. CrossOver updates itself through
+  Sparkle, and an update replaces the whole bundle, so the toolkit, the `.stock` backups and the
+  patch all go at once; the app is also re-signed locally, which drops the macOS permissions and
+  keychain entries tied to CodeWeavers' signature, and renamed, which breaks aliases and anything
+  launching it by path. Every CrossOver copy shares the bundle identifier
+  `com.codeweavers.CrossOver`, so update checks cannot be turned off for one copy without turning
+  them off for the original too. The Already Patched list says so when a copy's receipt no longer
+  matches the D3DMetal inside it. Quit those sessions yourself before patching. Afterwards the app is renamed to `CrossOver (GPTK x).app` unless that
   name is taken, and moved into Applications if it was somewhere like Downloads. Re-patching keeps
   any frame rate cap or HUD setting.
 - Replaces `apple_gptk` with the toolkit's copy, keeping the original as `apple_gptk.stock`. A
