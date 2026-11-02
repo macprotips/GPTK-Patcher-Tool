@@ -63,24 +63,18 @@ Doom (2016), Wolfenstein II and Detroit: Become Human are Vulkan games, so neith
 DXMT touches them. They go through MoltenVK, and CrossOver's bundled build is too old to render
 them. The app installs its own.
 
-The included build covers **Doom 2016** and **Wolfenstein II**. It advertises `shaderCullDistance`
-and `depthBounds`, which Metal does not have and both games insist on, and it carries current
-shader translation, without which the lighting shaders fail to compile and you get a black screen.
-No published build has both. [CREDITS](CREDITS.md) says whose work this is.
+The included build covers **Doom 2016** and **Wolfenstein II**. It claims two capabilities Metal
+does not have but both games refuse to start without, and it carries current shader translation,
+without which the lighting fails to compile and you get a black screen. No published build has
+both, which is why this one exists. [CREDITS](CREDITS.md) says whose work went into it.
 
 **Detroit: Become Human needs a different build**, from
 [MoltenVK-Detroit](https://github.com/DiAvisoo/MoltenVK-Detroit/releases). Drop the `.zip` in as
 it is. That game also needs its own game-side fixes, which their instructions cover.
 
-Worth knowing:
-
-- Keep a library per game and switch from the MoltenVK menu. These builds tell Metal it can do
-  things it cannot, which suits one game and can upset another.
-- The first launch after a swap sits on a black screen for several minutes while the game compiles
-  shaders. Later launches are quick.
-- Launch Steam games through Steam. A Steam copy of Doom exits silently otherwise, and it wants
-  `+r_renderAPI 1` to start in Vulkan rather than OpenGL.
-- The `doometernal` profile in the build script is untested; the game was not on hand.
+The first launch after swapping the library sits on a black screen for several minutes while the
+game compiles its shaders. Later launches are quick. Launch Steam games through Steam rather than
+running the executable, and give Doom `+r_renderAPI 1` so it starts in Vulkan.
 
 ## Undo
 
