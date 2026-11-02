@@ -18,13 +18,15 @@ dependencies. Keep changes small and reuse the existing scripts and Swift/Founda
 ## Code map
 
 - `GPTKPatcherApp.swift`: app lifecycle and headless CLI.
-- `ContentView.swift`, `FileTile.swift`, `ToolkitTile.swift`, `PatchedAppSettings.swift`: UI.
+- `ContentView.swift`, `FileTile.swift`, `ToolkitTile.swift`, `DXMTTile.swift`,
+  `PatchedAppSettings.swift`: UI.
 - `PatchEngine.swift`: observable UI state and patch orchestration.
 - `PatchJob.swift`: shared patch job, backups, verification, rollback, and receipts.
 - `CrossOverBundle.swift`: app validation and discovery.
 - `AppSigning.swift`, `FileSafety.swift`: local signatures, transaction backups, and mutation lock.
 - `AppSettings.swift`: inherited graphics options and transactional settings edits.
 - `GPTKSource.swift`, `DiskImage.swift`, `ToolkitLibrary.swift`: toolkit discovery and import.
+- `DXMTLibrary.swift`, `MoltenVKLibrary.swift`: imported DXMT and MoltenVK builds.
 - `BottleEnv.swift`, `PatchedApps.swift`, `Shell.swift`: config, registry, and process helpers.
 - `Resources/Info.plist`: app version and bundle metadata.
 
