@@ -1,123 +1,69 @@
 # GPTK Patcher Tool
 
-CrossOver bundles its own builds of Apple's Game Porting Toolkit, DXMT and MoltenVK, and they are
-usually a version or two behind what games need. This swaps them for newer ones, in a duplicate of
-CrossOver or in the app itself, and wires up DLSS to MetalFX while it is in there.
+Swaps the Game Porting Toolkit, DXMT and MoltenVK inside CrossOver for newer builds, and routes
+DLSS to MetalFX.
 
-[Download the latest release](https://github.com/macprotips/GPTK-Patcher-Tool/releases/latest).
-Signed and notarized, so it opens without a Gatekeeper fight.
-
-DXMT and MoltenVK support is **beta**. Patch a duplicate rather than your installed CrossOver
-while you try them.
+**[Download](https://github.com/macprotips/GPTK-Patcher-Tool/releases/latest)** (signed and
+notarized). DXMT and MoltenVK support is beta.
 
 ## You need
 
 - macOS 14 or later, Apple Silicon.
-- CrossOver 25, 26, or CrossOver Preview 27, launched once and set up.
-- A Game Porting Toolkit disk image from Apple's developer downloads. Nothing of Apple's is
-  redistributed here, so you supply your own.
-- Optional: a DXMT release (`dxmt-vX.XX-builtin.tar.gz`) from
-  [3Shain/dxmt](https://github.com/3Shain/dxmt/releases).
-- Optional: your own `libMoltenVK.dylib`. One is already included.
+- CrossOver 25, 26, or Preview 27, launched once and set up.
+- A Game Porting Toolkit disk image from Apple's developer downloads.
+- Optional: a [DXMT release](https://github.com/3Shain/dxmt/releases). A MoltenVK build is
+  already included.
 
 ## Patching
 
-1. Launch CrossOver once, finish its setup, then quit it and any running bottles.
-2. Drop `CrossOver.app` and the toolkit `.dmg` onto the tiles. Either tile takes either file, and
-   you can also paste with ⌘V or pick from a file chooser. The full `Game_Porting_Toolkit_x.dmg`
-   works as downloaded.
-3. Optional: drop a DXMT release or pick a MoltenVK build. Every menu has *Unchanged*, so you can
-   update one component and leave the rest alone.
+1. Quit CrossOver and any running bottles.
+2. Drop `CrossOver.app` and the toolkit `.dmg` onto the tiles. Either tile takes either file.
+3. Optional: add a DXMT or MoltenVK build. Anything left on *Unchanged* is not touched.
 4. Pick **Duplicate CrossOver** or **Patch Existing**, then click **Patch CrossOver**.
 
-A duplicate is saved as `CrossOver (GPTK 4.0b2, MoltenVK 1.4.3).app` in `/Applications`, named
-after what went into it. Nothing is overwritten. Patching in place keeps the app's current name and
-path so aliases, the Dock and open bottle sessions keep working, and there is a checkbox if you
-want the descriptive name instead.
+A duplicate is saved to `/Applications` as `CrossOver (GPTK 4.0b2, MoltenVK 1.4.3).app`. Patching
+in place keeps the app's name and path, and a CrossOver update will wipe the patch, so prefer a
+duplicate.
 
-Patching in place has two costs worth knowing. A CrossOver update replaces the whole app and takes
-the patch with it, and the local re-signature means macOS asks again for permissions it had already
-granted to CodeWeavers' build. Use a duplicate unless you have a reason not to.
-
-Every file the patcher replaces is kept beside the new one as `.stock`, and a cancelled or failed
-patch rolls back. Imported toolkits live in
-`~/Library/Application Support/GPTKPatcher/Toolkits/<version>/`, DXMT builds alongside in `DXMT/`.
+Originals are kept beside the replacements as `.stock`, and a failed or cancelled patch rolls back.
 
 ## Settings
 
-Patched copies show up in **Already Patched**. The gear sets the frame rate cap, the Metal
-Performance HUD and Metal 4, either as app defaults for every bottle that copy launches or per
-bottle, where bottle settings win. One cap covers both translation layers: `D3DM_MAX_FPS` for
-D3DMetal and `d3d11.preferredMaxFrameRate` for DXMT. DXMT wants a factor of your refresh rate, so
-30 or 60 on a 120 Hz display.
-
-Quit that CrossOver and its bottles before changing app defaults, since the app is re-signed after
-a config edit.
-
-If a patched copy is ever reported as damaged, quit it and choose **Repair Launch** from its
-right-click menu. That renews the local signature and changes nothing else.
+Patched copies appear in **Already Patched**. The gear sets the frame rate cap, the Metal
+Performance HUD and Metal 4, as app defaults or per bottle, where bottle settings win. Quit that
+CrossOver first. Use **Repair Launch** from the right-click menu if macOS ever calls a patched
+copy damaged.
 
 ## Vulkan games
 
-Doom (2016), Wolfenstein II and Detroit: Become Human are Vulkan games, so neither the toolkit nor
-DXMT touches them. They go through MoltenVK, and CrossOver's bundled build is too old to render
-them. The app installs its own.
+Doom (2016), Wolfenstein II and Detroit: Become Human need MoltenVK rather than the toolkit or
+DXMT. The included build covers Doom and Wolfenstein. Detroit needs
+[MoltenVK-Detroit](https://github.com/DiAvisoo/MoltenVK-Detroit/releases), dropped in as the `.zip`
+it downloads as, plus the game-side fixes in their instructions.
 
-The included build covers **Doom 2016** and **Wolfenstein II**. It claims two capabilities Metal
-does not have but both games refuse to start without, and it carries current shader translation,
-without which the lighting fails to compile and you get a black screen. No published build has
-both, which is why this one exists. [CREDITS](CREDITS.md) says whose work went into it.
-
-**Detroit: Become Human needs a different build**, from
-[MoltenVK-Detroit](https://github.com/DiAvisoo/MoltenVK-Detroit/releases). Drop the `.zip` in as
-it is. That game also needs its own game-side fixes, which their instructions cover.
-
-The first launch after swapping the library sits on a black screen for several minutes while the
-game compiles its shaders. Later launches are quick. Launch Steam games through Steam rather than
-running the executable, and give Doom `+r_renderAPI 1` so it starts in Vulkan.
+The first launch after a swap sits on a black screen for a few minutes while shaders compile.
+Launch Steam games through Steam, and give Doom `+r_renderAPI 1`.
 
 ## Undo
 
-Trash a duplicate and go back to the original. For an in-place patch, download CrossOver again from
-CodeWeavers, which restores both the files and their signature. Bottles live elsewhere and are not
-touched either way.
-
-## Command line
-
-The same patch path, inside the app bundle:
-
-```sh
-"/Applications/GPTK Patcher Tool.app/Contents/MacOS/GPTKPatcher" --cli --help
-```
+Trash a duplicate. For an in-place patch, download CrossOver again from CodeWeavers. Bottles are
+stored separately and are never touched.
 
 ## Building it
 
-A Swift Package Manager executable, SwiftUI and AppKit, no third-party dependencies. Needs a full
-Xcode in `/Applications`; Command Line Tools alone will not do.
+Swift Package Manager, SwiftUI, no dependencies. Needs a full Xcode in `/Applications`.
 
 ```sh
 scripts/run-app.sh      # build and launch
-scripts/build-app.sh    # universal build, ad hoc signed, no launch
-scripts/test.sh         # regression checks on disposable fixtures
+scripts/test.sh         # regression checks
 ```
 
-`scripts/build-moltenvk.sh standard` builds the MoltenVK library the app ships with.
-`scripts/release.sh` handles Developer ID signing and notarization. The checks use temporary app,
-toolkit and config fixtures with real code signing; they never touch installed apps or live
-bottles. There is an opt-in check that patches a disposable CrossOver copy end to end:
+`scripts/build-moltenvk.sh standard` builds the included MoltenVK library, and
+`scripts/release.sh` signs and notarizes. The command line interface is
+`GPTK Patcher Tool.app/Contents/MacOS/GPTKPatcher --cli --help`.
 
-```sh
-GPTKPATCHER_TEST_CROSSOVER="/path/to/disposable/CrossOver.app" \
-GPTKPATCHER_TEST_TOOLKIT="/path/to/toolkit/lib" \
-scripts/test.sh --filter StabilityTests/testOfficialCrossOverBundle
-```
+## Licensing
 
-## Licensing and support
-
-This project's code is MIT; see [LICENSE](LICENSE). Nearly everything it installs was written by
-someone else, and [CREDITS](CREDITS.md) says who.
-
-Apple's Game Porting Toolkit is not redistributed here and stays under Apple's terms. CrossOver is
-CodeWeavers' commercial software, and this modifies a copy you already bought. They do not support
-a patched CrossOver, so reproduce anything you want to report to them on an unmodified install
-first.
+MIT; see [LICENSE](LICENSE). Most of what this installs was written by other people, and
+[CREDITS](CREDITS.md) says who. Apple's toolkit is not redistributed. CrossOver is CodeWeavers'
+software and they do not support a patched copy.
