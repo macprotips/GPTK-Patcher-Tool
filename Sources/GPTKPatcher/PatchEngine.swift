@@ -28,13 +28,29 @@ final class PatchEngine {
     /// One engine for the window and for files opened via the Dock or Finder.
     static let shared = PatchEngine()
 
-    var crossOver: CrossOverBundle?
+    private var crossOverSelection: CrossOverBundle?
+    var crossOver: CrossOverBundle? {
+        get { crossOverSelection }
+        set {
+            guard newValue?.url != crossOverSelection?.url else { return }
+            crossOverSelection = newValue
+            // Read once per selection: every view update would otherwise re-read a plist.
+            installedD3DMetal = newValue?.installedD3DMetalVersion
+        }
+    }
     var crossOverURL: URL?
     var crossOverStatus: DropStatus = .empty
     var crossOverInstructions: String?
 
     var toolkits: [Toolkit] = []
-    var selectedToolkit: Toolkit?
+    private var toolkitSelection: Toolkit?
+    var selectedToolkit: Toolkit? {
+        get { toolkitSelection }
+        set {
+            guard newValue != toolkitSelection else { return }
+            toolkitSelection = newValue
+        }
+    }
     var importingImage: URL?
     var toolkitStatus: DropStatus = .empty
     var gptkVersion: String? { selectedToolkit?.version }
@@ -49,6 +65,8 @@ final class PatchEngine {
     var importingDXMT: URL?
     var dxmtStatus: DropStatus = .empty
 
+    /// Off unless chosen. Nothing about D3DMetal changes when this is nil.
+
     var patchedApps: [PatchedApp] = []
 
     private static let modeKey = "patchMode"
@@ -58,6 +76,13 @@ final class PatchEngine {
 
     var phase: Phase = .idle
     var logLines: [String] = []
+
+    /// Off by default: a patch that leaves the path alone breaks less. The name is recoverable
+    /// from the Patched list and the receipt either way.
+    private static let renameKey = "renamePatchedApp"
+    var renamePatchedApp: Bool = UserDefaults.standard.bool(forKey: PatchEngine.renameKey) {
+        didSet { UserDefaults.standard.set(renamePatchedApp, forKey: Self.renameKey) }
+    }
 
     private static let folderKey = "outputFolder"
     /// /Applications, alongside the user's other apps, unless it isn't writable for this account.
@@ -97,14 +122,17 @@ final class PatchEngine {
     var isBusy: Bool { isRunning || isImporting }
     var compatibilityIssue: String? { selectedToolkit?.compatibilityIssue }
     /// Either component is enough to patch; both is the usual case.
-    var hasSomethingToInstall: Bool { selectedToolkit != nil || selectedDXMT != nil || selectedMoltenVK != nil }
+    var hasSomethingToInstall: Bool {
+        selectedToolkit != nil || selectedDXMT != nil || selectedMoltenVK != nil
+    }
     var isReady: Bool { crossOver != nil && hasSomethingToInstall && importingImage == nil && importingDXMT == nil && importingMoltenVK == nil && !isBusy && compatibilityIssue == nil }
 
     /// The name the copy will get. Never replaces anything: if the name is taken, a counter is added.
     var outputName: String {
         let component = hasSomethingToInstall
             ? PatchJob.components(gptk: gptkVersion, dxmt: selectedDXMT?.version,
-                                  moltenVK: selectedMoltenVK.map { $0.version })
+                                  moltenVK: selectedMoltenVK.map { $0.version },
+                                  games: PatchJob.games(moltenVKBuild: selectedMoltenVK?.name))
             : "GPTK …"
         let base = "\(crossOver?.name ?? "CrossOver") (\(component))"
         var candidate = base + ".app"
@@ -273,6 +301,23 @@ final class PatchEngine {
         toolkitStatus = toolkits.isEmpty ? .empty : .ok(selectedToolkit?.version ?? "")
     }
 
+    /// Reads the D3DMetal that this patch will leave in the app, once per selection rather than per
+    /// redraw: the chosen toolkit's, or the app's own when the toolkit is being left alone.
+    /// The D3DMetal the selected CrossOver already has, read when it was chosen.
+    private(set) var installedD3DMetal: String?
+
+    /// Installing a toolkit older than the one already in the app. Legitimate, but never silent.
+    var downgradeNotice: String? {
+        guard let installed = installedD3DMetal, let chosen = selectedToolkit?.version,
+              D3DMetalVersion.isOlder(chosen, than: installed) else { return nil }
+        return "This CrossOver already has D3DMetal \(installed). The toolkit you chose is \(chosen), which is older, and patching replaces the newer one. Its original is kept and can be put back."
+    }
+
+    /// This app has patched the selected CrossOver before. Patching such a copy again in place is
+    /// the ordinary way to move it to a newer toolkit, and costs nothing a fresh patch would not
+    /// have already cost it.
+    var crossOverIsAlreadyPatched: Bool { crossOverSelection?.hasPatchBackup == true }
+
     // MARK: DXMT library
 
     func refreshDXMT() {
@@ -422,7 +467,8 @@ final class PatchEngine {
             DispatchQueue.main.async { if self.isRunning { self.phase = .running(step) } }
         }
         let request = PatchRequest(
-            crossOver: crossOver, toolkit: selectedToolkit, dxmt: selectedDXMT, moltenVK: selectedMoltenVK, mode: mode,
+            crossOver: crossOver, toolkit: selectedToolkit, dxmt: selectedDXMT, moltenVK: selectedMoltenVK,
+            mode: mode, renameInPlace: renamePatchedApp,
             destination: mode == .inPlace ? crossOver.url : outputURL,
             applicationsFolder: applicationsFolder,
             replaceExisting: false, graphics: graphics, bottles: [])

@@ -11,13 +11,24 @@ struct ContentView: View {
     @AppStorage("acknowledgedSupportNotice") private var acknowledgedSupportNotice = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let width: CGFloat = 520
+    private let width: CGFloat = 760
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
                 .padding(.bottom, isChoosing ? 26 : 30)
-            if isChoosing { modePicker.padding(.bottom, 26) }
+            if isChoosing {
+                modePicker.padding(.bottom, engine.mode == .inPlace ? 10 : 26)
+                if engine.mode == .inPlace {
+                    inPlaceWarning.padding(.bottom, 8)
+                    Toggle("Rename it to show what it carries", isOn: $engine.renamePatchedApp)
+                        .toggleStyle(.checkbox)
+                        .font(.callout)
+                        .disabled(engine.isBusy)
+                        .help("Off keeps the app's current name and path, which is what aliases, the Dock and existing bottle sessions point at")
+                        .padding(.bottom, 20)
+                }
+            }
 
             Group {
                 switch engine.phase {
@@ -101,22 +112,51 @@ struct ContentView: View {
         // describe the wrong segment half the time. The subtitle above states the current mode.
     }
 
+    /// What in-place patching costs, said before the choice rather than in the log afterwards.
+    /// A copy this app has already patched has paid all of it, and updating it in place is the
+    /// ordinary thing to do, so it gets a note rather than a warning.
+    @ViewBuilder
+    private var inPlaceWarning: some View {
+        if engine.crossOverIsAlreadyPatched {
+            Label {
+                Text("This copy was patched by this app, so patching it again in place is how you update it. Its original CrossOver is untouched either way.")
+            } icon: {
+                Image(systemName: "info.circle.fill").foregroundStyle(.secondary)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Label {
+                Text("CrossOver updates itself, and an update replaces the whole app: the toolkit, the backups and this patch all go. The app is also re-signed locally, so macOS asks again for permissions it had granted. A duplicate leaves your CrossOver untouched and can be re-patched the same way later.")
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            }
+            .font(.caption)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: Idle form
 
     private var form: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 16) {
+            // Equal thirds: each tile takes the same width whatever it happens to be showing.
+            HStack(alignment: .top, spacing: 14) {
                 FileTile(label: "CrossOver", prompt: "Drop CrossOver.app here",
                          contentType: .applicationBundle, fileExtension: "app",
                          url: engine.crossOverURL, status: engine.crossOverStatus,
                          onPick: { engine.route($0) }, onClear: engine.clearCrossOver)
+                    .frame(maxWidth: .infinity)
                 ToolkitTile(engine: engine)
+                    .frame(maxWidth: .infinity)
+                DXMTTile(engine: engine)
+                    .frame(maxWidth: .infinity)
             }
 
             // Always shown. These carry choices of their own, and hiding them behind a warning
             // about CrossOver or the toolkit takes a chosen build off the screen.
-            DXMTRow(engine: engine).padding(.top, 14)
-            MoltenVKRow(engine: engine).padding(.top, 10)
+            BetaRow(engine: engine).padding(.top, 16)
 
             if let instructions = engine.crossOverInstructions {
                 Label {
@@ -137,6 +177,11 @@ struct ContentView: View {
                     Button("Cancel Import", action: engine.cancel).disabled(engine.isCancelling)
                 }
                 .padding(.top, 10)
+            } else if let notice = engine.downgradeNotice {
+                Label(notice, systemImage: "arrow.down.circle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 10)
             } else if let issue = engine.compatibilityIssue {
                 Label(issue, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
@@ -165,7 +210,7 @@ struct ContentView: View {
 
     private var outputSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(showsPlannedOutput ? "Output" : "Patched")
+            SectionLabel(showsPlannedOutput ? "Output" : "Already Patched")
             ScrollView {
               VStack(spacing: 0) {
                 if showsPlannedOutput {
@@ -299,51 +344,71 @@ struct ContentView: View {
     // MARK: Done
 
     private func success(_ url: URL) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
+        let carried = PatchedAppRegistry.components(at: url)
+        return VStack(alignment: .leading, spacing: 0) {
+            // Centred, because the result is one statement rather than another form to read
+            // down the left edge.
+            VStack(spacing: 8) {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 22))
+                    .font(.system(size: 34))
                     .foregroundStyle(.green)
                 Text("CrossOver patched successfully")
-                    .font(.headline)
+                    .font(.title3.weight(.semibold))
+                Text(engine.mode == .copy
+                     ? "Open it like any other app. Your original CrossOver was not changed."
+                     : "The stock toolkit was kept as apple_gptk.stock inside the app.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
-            .padding(.bottom, 14)
-            Text(engine.mode == .copy ? "Patched copy created at" : "Patched app saved at")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Text(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                .font(.subheadline)
-                .textSelection(.enabled)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .padding(.top, 2)
-            let carried = PatchedAppRegistry.components(at: url)
-            if !carried.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(carried, id: \.name) { item in
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.green)
-                            Text(item.name)
-                                .foregroundStyle(.secondary)
-                            Text(item.detail)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer(minLength: 0)
-                        }
-                        .accessibilityElement(children: .combine)
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 24)
+
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
+                        .resizable()
+                        .interpolation(.high)
+                        .frame(width: 38, height: 38)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(url.deletingPathExtension().lastPathComponent)
+                            .font(.body.weight(.medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(url.deletingLastPathComponent().path
+                            .replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
                     }
+                    Spacer(minLength: 8)
                 }
-                .font(.subheadline)
-                .padding(.top, 16)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+
+                ForEach(carried, id: \.name) { item in
+                    Divider().padding(.leading, 14)
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.green)
+                        Text(item.name)
+                        Spacer(minLength: 12)
+                        Text(item.detail)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .font(.subheadline)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .accessibilityElement(children: .combine)
+                }
             }
-            Text(engine.mode == .copy
-                 ? "Open it like any other app. Your original CrossOver was not changed."
-                 : "The stock toolkit was kept as apple_gptk.stock inside the app.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 16)
+            .modifier(InputTileChrome(targeted: false, isEmpty: false, isError: false, cornerRadius: 10))
+
             HStack {
                 Button("Details…") { showLog = true }
                 Spacer()
@@ -614,11 +679,18 @@ private struct PatchedAppRow: View {
                     .font(.body.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text("GPTK \(app.gptkVersion) · \(app.folderDescription)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if app.patchReplaced {
+                    Text("CrossOver updated itself and replaced the patch. Patch it again to put it back.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text("GPTK \(app.gptkVersion) · \(app.folderDescription)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
             Spacer(minLength: 8)
             Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([app.url]) }
@@ -732,6 +804,9 @@ private struct ExtraRow<MenuItems: View>: View {
     /// The chosen build's name, or nil when this component is being left alone.
     let title: String?
     let hasLibrary: Bool
+    /// False greys the row out: it is shown so the option is discoverable, with `prompt` saying
+    /// what it would take to use it.
+    var enabled = true
     let prompt: String
     let help: String
     let onAdd: () -> Void
@@ -745,11 +820,12 @@ private struct ExtraRow<MenuItems: View>: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            control
+            control.disabled(!enabled)
             trailing
         }
         .padding(.trailing, 8)
-        .frame(height: 38)
+        // Fixed height normally, but an error has to be readable, so the row grows for one.
+        .frame(minHeight: 38)
         .modifier(InputTileChrome(targeted: targeted, hovering: hovering, isEmpty: title == nil, isError: isError))
         .onHover { hovering = $0 }
         .dropDestination(for: URL.self) { urls, _ in onDrop(urls) } isTargeted: { targeted = $0 }
@@ -769,7 +845,14 @@ private struct ExtraRow<MenuItems: View>: View {
         case .checking:
             row { Text("Adding…").foregroundStyle(.secondary).lineLimit(1) }
         case .failed(let text):
-            row { Text(text).font(.caption).foregroundStyle(.red).lineLimit(2) }
+            row {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .help(text)
+            }
         case .empty, .ok:
             if title != nil || hasLibrary {
                 Menu {
@@ -806,7 +889,6 @@ private struct ExtraRow<MenuItems: View>: View {
     private func row<Value: View>(@ViewBuilder _ value: () -> Value) -> some View {
         HStack(spacing: 8) {
             SectionLabel(label)
-            BetaTag()
             HStack(spacing: 4) { value() }
             Spacer(minLength: 4)
         }
@@ -833,59 +915,9 @@ private struct ExtraRow<MenuItems: View>: View {
     }
 }
 
-private struct DXMTRow: View {
-    @Bindable var engine: PatchEngine
-
-    var body: some View {
-        ExtraRow(label: "DXMT",
-                 status: engine.dxmtStatus,
-                 title: engine.selectedDXMT.map { "DXMT \($0.version)" },
-                 hasLibrary: !engine.dxmtBuilds.isEmpty,
-                 prompt: "Drop a release",
-                 help: "Replaces CrossOver's DXMT, which runs DirectX 11 games. Drop a dxmt-vX.XX-builtin.tar.gz here.",
-                 onAdd: openPanel,
-                 onClear: engine.clearDXMT,
-                 onDrop: { urls in
-                     var accepted = false
-                     for url in urls where engine.route(url) { accepted = true }
-                     return accepted
-                 }) {
-            // "Unchanged" is one of the choices rather than a separate command, so the menu is a
-            // single list of what this patch will do to DXMT.
-            Picker("DXMT version", selection: Binding(
-                get: { engine.selectedDXMT },
-                set: { if let build = $0 { engine.selectDXMT(build) } else { engine.clearDXMT() } })) {
-                    Text("Unchanged").tag(DXMTBuild?.none)
-                    ForEach(engine.dxmtBuilds) { build in
-                        Text(build.displayName).tag(Optional(build))
-                    }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            Divider()
-            Button("Add DXMT Release…", action: openPanel)
-            if let build = engine.selectedDXMT {
-                Button("Remove \(build.displayName) from Library", role: .destructive) { engine.removeDXMT(build) }
-            }
-        }
-    }
-
-    private func openPanel() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.message = "Choose a DXMT release archive"
-        if panel.runModal() == .OK, let url = panel.url {
-            guard DXMTLibrary.looksLikeArchive(url) else {
-                engine.dxmtStatus = .failed("Not a DXMT release archive (.tar.gz).")
-                return
-            }
-            engine.importDXMT(from: url)
-        }
-    }
-}
-
-private struct MoltenVKRow: View {
+/// A different MoltenVK, which runs Vulkan games. Beta because it replaces a translation layer
+/// CrossOver relies on, and has been tried on far fewer machines than the toolkit swap has.
+private struct BetaRow: View {
     @Bindable var engine: PatchEngine
 
     var body: some View {
@@ -942,7 +974,7 @@ private struct MoltenVKRow: View {
 
 /// Both optional components replace a translation layer CrossOver relies on, and both have been
 /// tried on far fewer machines than the toolkit swap has.
-private struct BetaTag: View {
+struct BetaTag: View {
     var body: some View {
         Text("beta")
             .font(.system(size: 9, weight: .semibold))
@@ -953,3 +985,5 @@ private struct BetaTag: View {
             .accessibilityLabel("beta")
     }
 }
+
+

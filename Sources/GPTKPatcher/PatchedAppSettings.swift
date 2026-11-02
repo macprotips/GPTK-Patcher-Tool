@@ -43,6 +43,10 @@ struct PatchedAppSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // Everything above the buttons scrolls, so a long message or a tall section can never
+            // push the popover past the screen and lose its own text off the bottom.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
             // Header
             VStack(alignment: .leading, spacing: 2) {
                 Text(app.name).font(.headline)
@@ -147,17 +151,33 @@ struct PatchedAppSettings: View {
 
             // Footer
             if let error {
-                ScrollView {
+                HStack(alignment: .top, spacing: 8) {
+                    // Shown in full: the popover as a whole scrolls, so nothing here is clipped.
                     Label(error, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(error, forType: .string)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                    .help("Copy this message")
+                    .accessibilityLabel("Copy the error message")
                 }
-                .frame(maxHeight: 90)
                 .padding(.top, 16)
             }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 520)
+            .fixedSize(horizontal: false, vertical: true)
+
             HStack(spacing: 10) {
                 if error == nil, applied, !isDirty {
                     Label("Applied", systemImage: "checkmark.circle.fill")

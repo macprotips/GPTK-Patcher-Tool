@@ -70,7 +70,8 @@ enum HeadlessRunner {
 
     private static let usage = """
         usage: GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version | none> [destination.app]
-                   [--in-place] [--replace] [--dxmt ARCHIVE|VERSION] [--moltenvk FILE|NAME]
+                   [--in-place] [--keep-name] [--replace] [--dxmt ARCHIVE|VERSION]
+                   [--moltenvk FILE|NAME]
                    [--fps N] [--hud] [--no-copy-env] [--bottle NAME]...
                GPTKPatcher --cli --repair <patched.app>
                GPTKPatcher --cli --quit-bottle <name> | --bottle-status <name>
@@ -112,6 +113,7 @@ enum HeadlessRunner {
         }
         var replace = false
         var inPlace = false
+        var keepName = false
         var hud = false
         var fps: Int? = nil
         var storeInCopy = true
@@ -124,6 +126,7 @@ enum HeadlessRunner {
             switch args[i] {
             case "--replace": replace = true
             case "--in-place": inPlace = true
+            case "--keep-name": keepName = true
             case "--hud": hud = true
             case "--no-copy-env": storeInCopy = false
             case "--fps":
@@ -213,7 +216,8 @@ enum HeadlessRunner {
                 }
             }
             let request = PatchRequest(
-                crossOver: crossOver, toolkit: toolkit, dxmt: dxmt, moltenVK: moltenVK, mode: inPlace ? .inPlace : .copy,
+                crossOver: crossOver, toolkit: toolkit, dxmt: dxmt, moltenVK: moltenVK,
+                mode: inPlace ? .inPlace : .copy, renameInPlace: !keepName,
                 destination: URL(fileURLWithPath: inPlace ? positional[0] : positional[2]),
                 applicationsFolder: applications,
                 replaceExisting: replace,

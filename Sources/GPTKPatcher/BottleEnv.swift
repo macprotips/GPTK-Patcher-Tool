@@ -222,20 +222,43 @@ enum BottleEnv {
 
     /// Checks open files as well as executable paths, so orphaned Wine clients are included
     /// even after their wineserver has exited. No processes are stopped by this check.
-    static func isUsingApp(_ app: URL) -> Bool {
-        guard let list = try? Shell.run("/bin/ps", ["-axo", "pid=,comm="], timeout: 20) else { return true }
+    /// True when something is running out of this app, false when nothing is, and nil when the
+    /// question could not be answered: `ps` or `lsof` failing is not evidence either way, and
+    /// reporting it as "in use" told people to quit an app that was not running.
+    /// What is running out of this app, as names for a message that can be acted on: empty when
+    /// nothing is, nil when the question could not be answered. `ps` or `lsof` failing is not
+    /// evidence either way, and reporting that as "in use" told people to quit an app that was
+    /// not running.
+    static func processesUsingApp(_ app: URL) -> [String]? {
+        guard let list = try? Shell.run("/bin/ps", ["-axo", "pid=,comm="], timeout: 20) else { return nil }
         let root = app.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        var candidates: [String] = []
+        var candidates: [(pid: String, name: String)] = []
+        var found: [String] = []
         for line in list.stdout.split(separator: "\n") {
             let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1)
             guard parts.count == 2, let pid = Int32(parts[0]), pid != getpid() else { continue }
-            if parts[1].hasPrefix(root) { return true }
-            let command = parts[1].lowercased()
-            if command.hasSuffix(".exe") || command.contains("wine") { candidates.append(String(pid)) }
+            let path = String(parts[1])
+            let name = (path as NSString).lastPathComponent
+            if path.hasPrefix(root) { found.append(name); continue }
+            let command = path.lowercased()
+            if command.hasSuffix(".exe") || command.contains("wine") { candidates.append((String(pid), name)) }
         }
-        guard !candidates.isEmpty else { return false }
-        guard let files = try? Shell.run("/usr/sbin/lsof", ["-Fpn", "-p", candidates.joined(separator: ",")], timeout: 30) else { return true }
-        return files.stdout.split(separator: "\n").contains { $0.hasPrefix("n" + root) }
+        guard !candidates.isEmpty else { return found.sorted() }
+        // Generous: lsof walks every open file of every candidate, and a machine running Steam
+        // or a browser has thousands.
+        guard let files = try? Shell.run("/usr/sbin/lsof", ["-Fpn", "-p", candidates.map(\.pid).joined(separator: ",")],
+                                         timeout: 90) else { return nil }
+        // lsof groups its output: a "p<pid>" line, then the files that process holds.
+        var current: String?
+        for line in files.stdout.split(separator: "\n") {
+            if line.hasPrefix("p") { current = String(line.dropFirst()) }
+            else if line.hasPrefix("n" + root), let pid = current,
+                    let match = candidates.first(where: { $0.pid == pid }) {
+                found.append(match.name)
+                current = nil
+            }
+        }
+        return Array(Set(found)).sorted()
     }
 
     /// Ends everything in the bottle the way CrossOver's own Quit does, then makes sure of it.

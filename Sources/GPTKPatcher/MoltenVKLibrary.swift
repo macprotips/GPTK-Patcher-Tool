@@ -50,6 +50,8 @@ enum MoltenVKLibrary {
     struct KnownBuild {
         let title: String
         let games: String
+        /// Short enough for the patched app's name.
+        let tag: String
     }
 
     /// Matched loosely, because a build keeps the name of the file or folder it arrived in and
@@ -58,9 +60,9 @@ enum MoltenVKLibrary {
         let lower = name.lowercased()
         // Checked longest first: "doometernal" also contains "doom".
         let catalogue: [(key: String, build: KnownBuild)] = [
-            ("doometernal", KnownBuild(title: "Doom Eternal build", games: "Doom Eternal")),
-            ("detroit", KnownBuild(title: "Detroit build", games: "Detroit: Become Human")),
-            ("standard", KnownBuild(title: "Standard build", games: "Doom (2016) · Wolfenstein II"))
+            ("doometernal", KnownBuild(title: "Doom Eternal build", games: "Doom Eternal", tag: "DOOM Eternal")),
+            ("detroit", KnownBuild(title: "Detroit build", games: "Detroit: Become Human", tag: "Detroit")),
+            ("standard", KnownBuild(title: "Standard build", games: "Doom (2016) · Wolfenstein II", tag: "DOOM + Wolf"))
         ]
         return catalogue.first { lower.contains($0.key) }?.build
     }
