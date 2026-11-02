@@ -6,6 +6,10 @@ struct PatchedApp: Identifiable, Hashable, Sendable {
     let name: String
     let gptkVersion: String
     let patchedAt: Date?
+    /// The toolkit the receipt records is no longer the one in the app. CrossOver updating itself
+    /// replaces the whole bundle, which takes the patch and its backups with it, and the receipt
+    /// is the only thing left saying it was ever there.
+    var patchReplaced = false
 
     var id: String { url.path }
     var globalConfig: URL { url.appendingPathComponent("Contents/SharedSupport/CrossOver/etc/CrossOver.conf") }
@@ -88,13 +92,19 @@ enum PatchedAppRegistry {
         return found
     }
 
-    private static func read(_ url: URL) -> PatchedApp? {
+    /// Internal so the replaced-patch check can be tested without the saved list.
+    static func read(_ url: URL) -> PatchedApp? {
         let receipt = url.appendingPathComponent(receiptPath)
         guard let data = try? Data(contentsOf: receipt),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let bundle = try? CrossOverBundle(url: url) else { return nil }
-        let version = (json["gptkD3DMetalVersion"] as? String) ?? bundle.installedD3DMetalVersion ?? "?"
+        let recorded = json["gptkD3DMetalVersion"] as? String
+        let installed = bundle.installedD3DMetalVersion
+        let version = recorded ?? installed ?? "?"
         let date = (json["date"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
-        return PatchedApp(url: url, name: bundle.name, gptkVersion: version, patchedAt: date)
+        // Only decidable when the receipt names a toolkit and the app still has a D3DMetal to read.
+        let replaced = recorded != nil && installed != nil && recorded != installed
+        return PatchedApp(url: url, name: bundle.name, gptkVersion: version, patchedAt: date,
+                          patchReplaced: replaced)
     }
 }
