@@ -233,9 +233,9 @@ enum MoltenVKLibrary {
                              path: target, architectures: archs, importedAt: Date())
     }
 
-    static func remove(_ build: MoltenVKBuild) throws {
+    static func remove(_ build: MoltenVKBuild, directory: URL = Self.directory) throws {
         // Built-in builds live in the app bundle; the path check below already refuses them.
-        guard !build.isBuiltIn, build.path.path.hasPrefix(directory.path) else { return }
+        guard !build.isBuiltIn, FileSafety.contains(build.path, in: directory) else { return }
         try FileManager.default.removeItem(at: build.path)
     }
 

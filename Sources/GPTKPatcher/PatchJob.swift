@@ -17,13 +17,16 @@ struct PatchRequest: Sendable {
     /// Whether an in-place patch renames the app after what it carries. Off keeps the path that
     /// aliases, Dock entries, launchers and existing bottle sessions already point at.
     var renameInPlace = true
-    /// Whether an in-place patch outside Applications is moved into it. Off for NotProton, which
-    /// tracks a CrossOver it was given by its path.
+    /// Whether an in-place patch of a CrossOver still in Downloads is moved into Applications.
+    /// Off for NotProton, which tracks a CrossOver it was given by its path.
     var moveToApplications = true
     /// Where the copy goes (`.copy` mode). For `.inPlace` this is the source app itself.
     let destination: URL
-    /// Applications folder an in-place patched app is moved into when it lives somewhere like Downloads.
+    /// Applications folder an in-place patched app is moved into when it is still in Downloads.
     let applicationsFolder: URL
+    /// Only an app in here is moved. An app anywhere else was put there on purpose, so an
+    /// in-place patch leaves it at that path.
+    var downloadsFolder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
     let replaceExisting: Bool
     let graphics: GraphicsSettings
     let bottles: [BottleEnv.Bottle]
@@ -382,7 +385,9 @@ struct PatchJob {
 
         // 8. A CrossOver patched where it was downloaded belongs in Applications, as CrossOver itself
         //    offers on first launch. Move it there unless something with that name is already there.
-        if request.mode == .inPlace, request.moveToApplications, !isInApplicationsFolder(finalURL) {
+        //    Anywhere else, such as a subfolder of Applications, is where the user keeps it.
+        if request.mode == .inPlace, request.moveToApplications,
+           FileSafety.contains(finalURL, in: request.downloadsFolder) {
             let target = request.applicationsFolder.appendingPathComponent(finalURL.lastPathComponent)
             if fm.fileExists(atPath: target.path) {
                 log("Left in \(finalURL.deletingLastPathComponent().path): \(target.lastPathComponent) already exists in \(request.applicationsFolder.path).")
@@ -594,12 +599,6 @@ struct PatchJob {
     }
 
     // MARK: - Steps
-
-    private func isInApplicationsFolder(_ url: URL) -> Bool {
-        let parent = url.deletingLastPathComponent().standardizedFileURL.path
-        let home = fm.homeDirectoryForCurrentUser.path
-        return parent == "/Applications" || parent == home + "/Applications"
-    }
 
     static func validateDestination(_ destination: URL, source: URL) throws {
         let dst = destination.resolvingSymlinksInPath().standardizedFileURL

@@ -24,7 +24,7 @@ notarized). DXMT and MoltenVK support is beta.
 
 A duplicate is saved to `/Applications` as `CrossOver (GPTK 4.0b2, MoltenVK 1.4.3).app`. Patching
 in place keeps the app's name and path, and a CrossOver update will wipe the patch, so prefer a
-duplicate.
+duplicate. A CrossOver still in Downloads is moved to Applications.
 
 Originals are kept beside the replacements as `.stock`, and a failed or cancelled patch rolls back.
 

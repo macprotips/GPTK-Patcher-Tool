@@ -8,6 +8,7 @@ on:
     inputs:
       ref:
         description: MoltenVK git ref to build (a release tag, or main)
+        # Keep in step with moltenvk/VERSION, the release the app ships with.
         default: v1.4.2
         required: true
       release_tag:

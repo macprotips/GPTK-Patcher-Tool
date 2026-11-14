@@ -36,7 +36,7 @@ struct WhatChangesPopover: View {
         if mode == .copy {
             bullet("Duplicates CrossOver.app. On APFS the copy costs almost no space until files change.")
         } else {
-            bullet("Patches the selected CrossOver.app in place. Quit CrossOver first.")
+            bullet("Patches the selected CrossOver.app in place. Quit CrossOver first. It stays where it is, unless it is still in Downloads: then it moves to Applications.")
         }
         bullet("Swaps in the toolkit's D3DMetal, keeping the original as apple_gptk.stock. Set the toolkit to Unchanged to update only DXMT.")
         bullet("Adds the nvngx.dll DLSS games look for, and routes DLSS to MetalFX in every bottle this copy launches.")

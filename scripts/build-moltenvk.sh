@@ -1,7 +1,9 @@
 #!/bin/bash
 # Builds MoltenVK with the small changes a game family needs, on top of current upstream.
 #
-#   scripts/build-moltenvk.sh standard [--ref v1.4.2] [--out DIR]
+#   scripts/build-moltenvk.sh standard [--ref TAG] [--out DIR]
+#
+# The ref defaults to moltenvk/VERSION, the release the app ships with.
 #
 # Profiles:
 #   standard      Doom (2016), Wolfenstein II: The New Colossus, Detroit: Become Human
@@ -26,7 +28,7 @@
 set -euo pipefail
 
 profile="${1:-}"
-ref="v1.4.2"
+ref="$(tr -d '[:space:]' < "$(dirname "$0")/../moltenvk/VERSION")"
 out="$HOME/Library/Application Support/GPTKPatcher/MoltenVK-builds"
 shift || true
 while [ $# -gt 0 ]; do

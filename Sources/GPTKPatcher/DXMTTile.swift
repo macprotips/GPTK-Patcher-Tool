@@ -24,7 +24,8 @@ struct DXMTTile: View {
                      contentType: .archive, fileExtension: "tar.gz",
                      url: engine.importingDXMT,
                      status: engine.dxmtStatus,
-                     onPick: { engine.route($0) }, onClear: engine.clearDXMT)
+                     onPick: { engine.route($0, preferring: .dxmt) }, onClear: engine.clearDXMT,
+                     choose: openPanel)
         }
     }
 
@@ -102,7 +103,7 @@ struct DXMTTile: View {
         }
         .dropDestination(for: URL.self) { urls, _ in
             var accepted = false
-            for url in urls where engine.route(url) { accepted = true }
+            for url in urls where engine.route(url, preferring: .dxmt) { accepted = true }
             return accepted
         } isTargeted: { targeted = $0 }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: targeted)

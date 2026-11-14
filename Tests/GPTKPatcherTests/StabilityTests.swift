@@ -128,7 +128,9 @@ final class StabilityTests: XCTestCase {
         PatchRequest(crossOver: app, toolkit: kit, dxmt: dxmt, moltenVK: moltenVK,
                      mode: mode, renameInPlace: renameInPlace,
                      destination: root.appendingPathComponent("Patched.app"),
-                     applicationsFolder: root.appendingPathComponent("Applications"), replaceExisting: false,
+                     applicationsFolder: root.appendingPathComponent("Applications"),
+                     // The fixture sits at the top of root, standing in for a fresh download.
+                     downloadsFolder: root, replaceExisting: false,
                      graphics: GraphicsSettings(fpsCap: 120, metalHUD: true), bottles: bottles)
     }
 
@@ -456,8 +458,8 @@ final class StabilityTests: XCTestCase {
                                   log: { _ in }).run()
 
         XCTAssertEqual(result.lastPathComponent, "CrossOver.app", "the name it had is the name it keeps")
-        // An app outside Applications is still moved there, as it was before: that is about where
-        // CrossOver belongs, not about what it is called.
+        // An app still in Downloads is moved to Applications: that is about where CrossOver
+        // belongs, not about what it is called.
         XCTAssertEqual(result.deletingLastPathComponent().standardizedFileURL,
                        root.appendingPathComponent("Applications").standardizedFileURL)
         // Keeping the name must not cost anything else: the patch, the backup and the receipt are
@@ -1385,5 +1387,165 @@ extension StabilityTests {
             .localizedDescription.hasSuffix("Still running: DOOMx64vk.exe."), "a game is named, the services are not")
         XCTAssertEqual(BottleEnv.elapsedSeconds("04-17:50:22"), 4 * 86_400 + 17 * 3600 + 50 * 60 + 22)
         XCTAssertEqual(BottleEnv.elapsedSeconds("01:05"), 65)
+    }
+
+    // MARK: Fixes from the November 2026 audit
+
+    private func libraryFolders() -> PatchEngine.LibraryFolders {
+        PatchEngine.LibraryFolders(toolkits: root.appendingPathComponent("lib-toolkits"),
+                                   dxmt: root.appendingPathComponent("lib-dxmt"),
+                                   moltenVK: root.appendingPathComponent("lib-moltenvk"))
+    }
+
+    /// Waits for an import to finish, as the window would.
+    @MainActor
+    private func settle(_ engine: PatchEngine, file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<100 where engine.isBusy { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertFalse(engine.isBusy, "the import never finished", file: file, line: line)
+    }
+
+    private func sealIsValid(_ url: URL) throws -> Bool {
+        try Shell.run("/usr/bin/codesign", ["--verify", "--strict", url.path]).status == 0
+    }
+
+    @MainActor
+    func testACancelledDXMTImportLeavesTheWindowTakingFiles() async throws {
+        let engine = PatchEngine(folders: libraryFolders())
+        let archive = root.appendingPathComponent("dxmt-v0.80-builtin.tar.gz")
+        try Data("not really gzip".utf8).write(to: archive)
+        engine.importDXMT(from: archive)
+        XCTAssertEqual(engine.importingComponent, "DXMT", "the line under the tiles names what is imported")
+        engine.cancel()
+        XCTAssertTrue(engine.isCancelling)
+        try await settle(engine)
+        XCTAssertFalse(engine.isCancelling, "a finished import is no longer being cancelled")
+        XCTAssertNil(engine.importingComponent)
+        let (app, _) = try fixture()
+        XCTAssertTrue(engine.route(app.url), "the next file dropped is taken")
+        XCTAssertEqual(engine.crossOver?.url.standardizedFileURL, app.url.standardizedFileURL)
+    }
+
+    @MainActor
+    func testACancelledMoltenVKImportLeavesTheWindowTakingFiles() async throws {
+        let engine = PatchEngine(folders: libraryFolders())
+        let archive = root.appendingPathComponent("MoltenVK-macos.zip")
+        try Data("not really a zip".utf8).write(to: archive)
+        engine.importMoltenVK(from: archive)
+        engine.cancel()
+        try await settle(engine)
+        XCTAssertFalse(engine.isCancelling)
+        XCTAssertTrue(engine.route(try fixture().0.url))
+    }
+
+    @MainActor
+    func testTakingDXMTOutDuringItsImportCannotStrandTheWindow() async throws {
+        let engine = PatchEngine(folders: libraryFolders())
+        let archive = root.appendingPathComponent("dxmt-v0.80-builtin.tar.gz")
+        try Data("not really gzip".utf8).write(to: archive)
+        engine.importDXMT(from: archive)
+        engine.clearDXMT()
+        XCTAssertEqual(engine.importingDXMT, archive, "the import has to land first; Cancel Import stops it")
+        engine.clearMoltenVK()
+        try await settle(engine)
+        XCTAssertNil(engine.importingDXMT)
+        engine.clearDXMT()
+        XCTAssertEqual(engine.dxmtStatus, .empty)
+    }
+
+    func testATarArchiveGoesToTheTileItWasDroppedOn() {
+        func input(_ name: String, _ tile: PatchEngine.Input? = nil) -> PatchEngine.Input? {
+            PatchEngine.input(for: URL(fileURLWithPath: "/tmp/\(name)"), preferring: tile)
+        }
+        // Dropped on the window: the name decides, and DXMT, which ships as a tarball, otherwise.
+        XCTAssertEqual(input("MoltenVK-macos.tar"), .moltenVK)
+        XCTAssertEqual(input("dxmt-v0.80-builtin.tar.gz"), .dxmt)
+        XCTAssertEqual(input("build.tar.gz"), .dxmt)
+        // Dropped on a tile: that tile wins for an archive either could take.
+        XCTAssertEqual(input("build.tar.gz", .moltenVK), .moltenVK)
+        XCTAssertEqual(input("MoltenVK-macos.tar", .dxmt), .dxmt)
+        // A file only one input takes goes there, whichever tile it lands on.
+        XCTAssertEqual(input("libMoltenVK.dylib", .dxmt), .moltenVK)
+        XCTAssertEqual(input("MoltenVK.zip", .dxmt), .moltenVK)
+        XCTAssertEqual(input("CrossOver.app", .dxmt), .crossOver)
+        XCTAssertEqual(input("Game_Porting_Toolkit_3.0.dmg", .moltenVK), .toolkit)
+        XCTAssertNil(input("notes.txt"))
+    }
+
+    @MainActor
+    func testAMoltenVKArchiveDroppedOnTheWindowIsNotSentToDXMT() async throws {
+        let engine = PatchEngine(folders: libraryFolders())
+        let archive = root.appendingPathComponent("MoltenVK-macos.tar")
+        try Data("x".utf8).write(to: archive)
+        XCTAssertTrue(engine.route(archive))
+        XCTAssertEqual(engine.importingMoltenVK, archive)
+        XCTAssertNil(engine.importingDXMT)
+        try await settle(engine)
+        XCTAssertEqual(engine.dxmtStatus, .empty, "DXMT was never involved")
+    }
+
+    func testAnInPlacePatchLeavesAnAppOutsideDownloadsWhereItIs() throws {
+        let (app, kit) = try fixture()
+        let games = root.appendingPathComponent("Applications/Games")
+        try fm.createDirectory(at: games, withIntermediateDirectories: true)
+        let kept = games.appendingPathComponent("CrossOver.app")
+        try fm.moveItem(at: app.url, to: kept)
+        var req = request(try CrossOverBundle(url: kept), kit, mode: .inPlace, renameInPlace: false)
+        req.downloadsFolder = root.appendingPathComponent("Downloads")
+        let result = try PatchJob(request: req, log: { _ in }).run()
+        XCTAssertEqual(result.standardizedFileURL, kept.standardizedFileURL, "its folder is where the user keeps it")
+        XCTAssertEqual(try CrossOverBundle(url: result).installedD3DMetalVersion, "4.0b2")
+        try assertSigned(result)
+    }
+
+    func testAnInPlacePatchStillMovesAnAppOutOfDownloads() throws {
+        let (app, kit) = try fixture()
+        let downloads = root.appendingPathComponent("Downloads")
+        try fm.createDirectory(at: downloads, withIntermediateDirectories: true)
+        let fresh = downloads.appendingPathComponent("CrossOver.app")
+        try fm.moveItem(at: app.url, to: fresh)
+        var req = request(try CrossOverBundle(url: fresh), kit, mode: .inPlace, renameInPlace: false)
+        req.downloadsFolder = downloads
+        let result = try PatchJob(request: req, log: { _ in }).run()
+        XCTAssertEqual(result.standardizedFileURL,
+                       root.appendingPathComponent("Applications/CrossOver.app").standardizedFileURL)
+    }
+
+    func testADXMTOnlyCopyCanBeRepairedAndPatchedAgain() throws {
+        let (app, _) = try fixture()
+        let result = try PatchJob(request: request(app, nil, dxmt: try dxmtBuild("0.80")), log: { _ in }).run()
+        XCTAssertTrue(try CrossOverBundle(url: result).hasPatchBackup, "dxmt.stock is a patch backup too")
+
+        // Something edits a sealed file, which is when macOS calls the app damaged.
+        let conf = result.appendingPathComponent("Contents/SharedSupport/CrossOver/etc/CrossOver.conf")
+        try "changed\n".write(to: conf, atomically: true, encoding: .utf8)
+        XCTAssertFalse(try sealIsValid(result))
+        try AppSigning.repair(CrossOverBundle(url: result), log: { _ in })
+        try assertSigned(result)
+
+        // A broken seal no longer blocks patching it again.
+        try "changed again\n".write(to: conf, atomically: true, encoding: .utf8)
+        let again = try PatchJob(request: request(CrossOverBundle(url: result), nil, mode: .inPlace,
+                                                  dxmt: try dxmtBuild("0.81"), renameInPlace: false),
+                                 log: { _ in }).run()
+        XCTAssertEqual(try String(contentsOf: dxmtDir(again).appendingPathComponent("x86_64-windows/d3d11.dll"), encoding: .utf8),
+                       "build-0.81")
+        try assertSigned(again)
+    }
+
+    func testAMoltenVKOnlyCopyCountsAsPatched() throws {
+        let (app, _) = try fixture()
+        let result = try PatchJob(request: request(app, nil, moltenVK: try moltenVKBuild()), log: { _ in }).run()
+        XCTAssertTrue(try CrossOverBundle(url: result).hasPatchBackup)
+    }
+
+    func testAReceiptAloneDoesNotMakeAnAppCountAsPatched() throws {
+        let (app, _) = try fixture()
+        // A receipt naming backups that are not there, or that sit outside the app.
+        let receipt: [String: Any] = ["tool": "GPTKPatcher 1.0", "dxmtStock": "../elsewhere/dxmt.stock",
+                                      "stockBackup": "Contents/missing.stock", "moltenVKSlots": ["Contents/none.dylib"]]
+        try JSONSerialization.data(withJSONObject: receipt)
+            .write(to: app.url.appendingPathComponent(PatchedAppRegistry.receiptPath))
+        _ = try write("x", "elsewhere/dxmt.stock/file")
+        XCTAssertFalse(try CrossOverBundle(url: app.url).hasPatchBackup)
     }
 }

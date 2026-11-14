@@ -70,13 +70,15 @@ enum HeadlessRunner {
 
     private static let usage = """
         usage: GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version | none> [destination.app]
-                   [--in-place] [--keep-name] [--replace] [--dxmt ARCHIVE|VERSION]
+                   [--in-place] [--rename] [--replace] [--dxmt ARCHIVE|VERSION]
                    [--moltenvk FILE|NAME]
                    [--fps N] [--hud] [--no-copy-env] [--bottle NAME]...
                GPTKPatcher --cli --repair <patched.app>
                GPTKPatcher --cli --quit-bottle <name> | --bottle-status <name>
 
         Pass none as the toolkit to leave it alone and update only DXMT or MoltenVK.
+        --in-place keeps the app's name and path. --rename names it after what it carries.
+        An app still in Downloads is moved to Applications.
 
         """
 
@@ -113,7 +115,7 @@ enum HeadlessRunner {
         }
         var replace = false
         var inPlace = false
-        var keepName = false
+        var rename = false
         var hud = false
         var fps: Int? = nil
         var storeInCopy = true
@@ -126,7 +128,8 @@ enum HeadlessRunner {
             switch args[i] {
             case "--replace": replace = true
             case "--in-place": inPlace = true
-            case "--keep-name": keepName = true
+            case "--rename": rename = true
+            case "--keep-name": rename = false  // The default now; still accepted for old scripts.
             case "--hud": hud = true
             case "--no-copy-env": storeInCopy = false
             case "--fps":
@@ -217,7 +220,7 @@ enum HeadlessRunner {
             }
             let request = PatchRequest(
                 crossOver: crossOver, toolkit: toolkit, dxmt: dxmt, moltenVK: moltenVK,
-                mode: inPlace ? .inPlace : .copy, renameInPlace: !keepName,
+                mode: inPlace ? .inPlace : .copy, renameInPlace: rename,
                 destination: URL(fileURLWithPath: inPlace ? positional[0] : positional[2]),
                 applicationsFolder: applications,
                 replaceExisting: replace,

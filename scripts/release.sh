@@ -9,7 +9,8 @@ cd "$(dirname "$0")/.."
 IDENTITY="${IDENTITY:-Developer ID Application}"
 PROFILE="${NOTARY_PROFILE:-notary}"
 
-scripts/build-app.sh
+# A release always ships the pinned MoltenVK: the README promises Vulkan games work out of the box.
+REQUIRE_MOLTENVK=1 scripts/build-app.sh
 APP="build/GPTK Patcher Tool.app"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 
