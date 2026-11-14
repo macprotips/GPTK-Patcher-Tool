@@ -67,7 +67,7 @@ enum Quarantine {
     private static let name = "com.apple.quarantine"
 
     /// The download's approval marker is a first-open hint, not a complete launch history.
-    /// ponytail: copies can lose or inherit this metadata; only block a recorded pending approval.
+    /// Copies can lose or inherit it, so only a recorded pending approval blocks a patch.
     static func hasPendingApproval(at url: URL) throws -> Bool {
         let size = getxattr(url.path, name, nil, 0, 0, XATTR_NOFOLLOW)
         if size < 0 {

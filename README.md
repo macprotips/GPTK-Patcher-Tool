@@ -16,8 +16,9 @@ notarized). DXMT and MoltenVK support is beta.
 
 ## Patching
 
-1. Quit CrossOver and any running bottles.
-2. Drop `CrossOver.app` and the toolkit `.dmg` onto the tiles. Either tile takes either file.
+1. Quit CrossOver and any running bottles. Choose **CrossOver** when the app asks what you are
+   patching.
+2. Drop `CrossOver.app` and the toolkit `.dmg` anywhere in the window, or on the Dock icon.
 3. Optional: add a DXMT or MoltenVK build. Anything left on *Unchanged* is not touched.
 4. Pick **Duplicate CrossOver** or **Patch Existing**, then click **Patch CrossOver**.
 
@@ -29,7 +30,7 @@ Originals are kept beside the replacements as `.stock`, and a failed or cancelle
 
 ## Settings
 
-Patched copies appear in **Already Patched**. The gear sets the frame rate cap, the Metal
+Patched copies appear in **Already Patched Versions**. The gear sets the frame rate cap, the Metal
 Performance HUD and Metal 4, as app defaults or per bottle, where bottle settings win. Quit that
 CrossOver first. Use **Repair Launch** from the right-click menu if macOS ever calls a patched
 copy damaged.
@@ -43,6 +44,25 @@ it downloads as, plus the game-side fixes in their instructions.
 
 The first launch after a swap sits on a black screen for a few minutes while shaders compile.
 Launch Steam games through Steam, and give Doom `+r_renderAPI 1`.
+
+## NotProton
+
+Choose **NotProton** when the app asks what you are patching. The CrossOver that NotProton uses is
+selected for you. Pick the versions and click **Patch NotProton**.
+
+NotProton runs games from its own copy of CrossOver, so patching updates that copy too. Only the
+files this app patched are replaced, and never while a game is running. If NotProton has not been
+given that CrossOver yet, set it up there after patching.
+
+NotProton never uses a duplicate that sits beside its original, so the app patches in place and
+warns when NotProton would pick a different copy.
+
+After patching in a MoltenVK build, **Set Up in Steam** gives its games the launch options they
+need. **Frame Rate Cap** adds a D3DMetal cap to a game's Steam launch options, restarting Steam to save
+it. The DXMT cap is in NotProton's panel in Steam. D3DMetal runs on NotProton's Rosetta tool only.
+
+Patching can break games. Don't report those problems to the NotProton developers. To reset
+NotProton, use **Remove Everything** in the NotProton app, then set it up again.
 
 ## Undo
 

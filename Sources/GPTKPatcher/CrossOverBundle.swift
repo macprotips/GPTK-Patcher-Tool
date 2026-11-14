@@ -141,4 +141,15 @@ struct CrossOverBundle: Sendable {
         guard let dir = try? gptkDirectory() else { return nil }
         return D3DMetalInfo.read(inLib: dir).version
     }
+
+    /// The release DXMT was built from, which it carries as a tag like `v0.72-25-gf35d839`.
+    var installedDXMTVersion: String? {
+        let dll = sharedSupport.appendingPathComponent("lib/dxmt/x86_64-windows/d3d11.dll")
+        guard let data = try? Data(contentsOf: dll, options: .mappedIfSafe) else { return nil }
+        let text = String(decoding: data, as: Unicode.ASCII.self)
+        let tag = try? NSRegularExpression(pattern: #"\x00v(\d+\.\d+(?:\.\d+)?)(?:-\d+-g[0-9a-f]+)?\x00"#)
+        guard let match = tag?.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[range])
+    }
 }

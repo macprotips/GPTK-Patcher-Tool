@@ -220,15 +220,9 @@ enum BottleEnv {
         return runningBottles().filter { $0.cxRoot.map { URL(fileURLWithPath: $0).standardizedFileURL.path == root } ?? false }
     }
 
-    /// Checks open files as well as executable paths, so orphaned Wine clients are included
-    /// even after their wineserver has exited. No processes are stopped by this check.
-    /// True when something is running out of this app, false when nothing is, and nil when the
-    /// question could not be answered: `ps` or `lsof` failing is not evidence either way, and
-    /// reporting it as "in use" told people to quit an app that was not running.
-    /// What is running out of this app, as names for a message that can be acted on: empty when
-    /// nothing is, nil when the question could not be answered. `ps` or `lsof` failing is not
-    /// evidence either way, and reporting that as "in use" told people to quit an app that was
-    /// not running.
+    /// Names of the processes running out of this app: empty when none, nil when `ps` or `lsof`
+    /// failed and the answer is unknown. Checks open files as well as executable paths, so
+    /// orphaned Wine clients count after their wineserver has exited. Stops nothing.
     static func processesUsingApp(_ app: URL) -> [String]? {
         guard let list = try? Shell.run("/bin/ps", ["-axo", "pid=,comm="], timeout: 20) else { return nil }
         let root = app.resolvingSymlinksInPath().standardizedFileURL.path + "/"
@@ -373,6 +367,13 @@ struct GraphicsSettings: Sendable, Equatable {
     /// and those passes never render. Only worth setting when a MoltenVK build is in use.
     var moltenVKSettings = false
     var storeInCopy = true
+
+    /// What `moltenVKSettings` sets, for anything that has to pass it on some other way.
+    static var moltenVKVariables: [(key: String, value: String)] {
+        GraphicsSettings(moltenVKSettings: true).assignments.compactMap { key, value in
+            key.hasPrefix("MVK_") ? value.map { (key, $0) } : nil
+        }
+    }
 
     /// key → value; a nil value leaves whatever the file already has. DLSS → MetalFX is always on.
     var assignments: [(key: String, value: String?)] {

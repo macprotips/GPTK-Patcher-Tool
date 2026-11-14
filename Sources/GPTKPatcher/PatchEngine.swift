@@ -12,6 +12,8 @@ enum DropStatus: Equatable {
 struct Failure: Equatable {
     let title: String
     let message: String
+    /// macOS refused the write, which the App Management privacy setting can lift.
+    var needsPermission = false
 }
 
 enum Phase: Equatable {
@@ -34,8 +36,7 @@ final class PatchEngine {
         set {
             guard newValue?.url != crossOverSelection?.url else { return }
             crossOverSelection = newValue
-            // Read once per selection: every view update would otherwise re-read a plist.
-            installedD3DMetal = newValue?.installedD3DMetalVersion
+            refreshInstalledVersions()
         }
     }
     var crossOverURL: URL?
@@ -70,9 +71,17 @@ final class PatchEngine {
     var patchedApps: [PatchedApp] = []
 
     private static let modeKey = "patchMode"
-    var mode: PatchMode = PatchMode(rawValue: UserDefaults.standard.string(forKey: PatchEngine.modeKey) ?? "") ?? .copy {
-        didSet { UserDefaults.standard.set(mode.rawValue, forKey: Self.modeKey) }
+    private var chosenMode: PatchMode = PatchMode(rawValue: UserDefaults.standard.string(forKey: PatchEngine.modeKey) ?? "") ?? .copy {
+        didSet { UserDefaults.standard.set(chosenMode.rawValue, forKey: Self.modeKey) }
     }
+
+    /// Always in place for NotProton, which never uses a duplicate beside its original.
+    var mode: PatchMode {
+        get { forNotProton ? .inPlace : chosenMode }
+        set { chosenMode = newValue }
+    }
+
+    var forNotProton: Bool { destination == .notProton }
 
     var phase: Phase = .idle
     var logLines: [String] = []
@@ -150,6 +159,172 @@ final class PatchEngine {
         GraphicsSettings(storeInCopy: true)
     }
 
+    // MARK: NotProton
+
+    /// What is being patched, which decides the screen the window shows. Nil until the question
+    /// has been answered once, or when the answer was NotProton and it has since gone.
+    var destination: Destination? = Destination.remembered == .notProton && !NotProton.isInstalled ? nil : Destination.remembered {
+        didSet {
+            if let destination { Destination.remember(destination) }
+            refreshNotProton()
+            selectNotProtonsCrossOver()
+        }
+    }
+
+    /// Whether NotProton is on this Mac. Read at launch and again when the person points at it,
+    /// rather than on every redraw.
+    var notProtonInstalled = NotProton.isInstalled
+
+    /// Why the app the person pointed at was refused, shown under the question.
+    var notProtonLocateError: String?
+
+    /// The CrossOver builds NotProton has cloned. Empty until one has been set up in it.
+    var notProtonBuilds: [String] = []
+
+    /// The same-build CrossOver NotProton lists ahead of the selected one.
+    var notProtonRival: URL?
+
+    /// Whether NotProton already holds a copy of the selected CrossOver.
+    var notProtonHasCopy = false
+
+    /// NotProton's copy of the selected CrossOver lacks the patch the app now has.
+    var notProtonIsBehind = false
+
+    /// Why the last attempt to update NotProton's copy failed.
+    var notProtonUpdateError: String?
+
+    /// True while NotProton's copy is being updated.
+    var notProtonUpdating = false
+
+    /// Reads NotProton's state for the selected CrossOver. Called when the selection or the
+    /// destination changes rather than on every redraw, since it hashes files.
+    func refreshNotProton() {
+        notProtonBuilds = notProtonInstalled ? NotProton.linkedBuilds() : []
+        notProtonRival = forNotProton ? crossOver.flatMap { NotProton.usedInstead(of: $0.url) } : nil
+        notProtonHasCopy = forNotProton && crossOver.map { !NotProton.runners(for: $0.url).isEmpty } == true
+        notProtonIsBehind = forNotProton && crossOver.map { NotProton.isBehind($0.url) } == true
+        frameCapSupported = !forNotProton || crossOver.map { NotProton.hasFrameCap($0.url) } != false
+        if forNotProton { refreshSteam() }
+    }
+
+    func locateNotProton(_ app: URL) {
+        guard NotProton.locate(app) else {
+            notProtonLocateError = "\(app.lastPathComponent) is not NotProton."
+            return
+        }
+        notProtonLocateError = nil
+        notProtonInstalled = true
+        refreshNotProton()
+    }
+
+    /// Selects the CrossOver NotProton already uses. Leaves an existing selection alone.
+    func selectNotProtonsCrossOver() {
+        guard forNotProton, crossOver == nil, crossOverURL == nil, !notProtonBuilds.isEmpty else { return }
+        for app in NotProton.discovered() {
+            guard (try? CrossOverBundle(url: app)) != nil, !NotProton.runners(for: app).isEmpty else { continue }
+            setCrossOver(app)
+            return
+        }
+    }
+
+    /// Copies the selected CrossOver's patch into NotProton's copy of it, off the main thread
+    /// since it copies files.
+    func updateNotProton() {
+        guard let crossOver, !notProtonUpdating else { return }
+        notProtonUpdating = true
+        let app = crossOver.url, build = crossOver.build
+        Task.detached(priority: .userInitiated) {
+            let result = Result { try NotProton.update(from: app) }
+            await MainActor.run {
+                switch result {
+                case .success:
+                    self.notProtonUpdateError = nil
+                    self.logLines.append("Updated NotProton's copy of build \(build).")
+                case .failure(let error):
+                    self.notProtonUpdateError = "NotProton's copy was not updated. \(error.localizedDescription)"
+                }
+                self.notProtonUpdating = false
+                self.refreshNotProton()
+            }
+        }
+    }
+
+    // MARK: Steam launch options
+
+    /// Installed Steam games, and the D3DMetal cap in each one's launch options.
+    var steamGames: [Steam.Game] = []
+    var steamLaunchOptions: [String: String] = [:]
+    var frameCaps: [String: Int] { steamLaunchOptions.mapValues(FrameCap.current(in:)) }
+    /// False when the D3DMetal that NotProton's games run is too old to have the cap.
+    var frameCapSupported = true
+
+    /// The state of the last launch option change, shown beside the control that made it.
+    var launchOptionsBusy = false
+    var launchOptionsMessage: String?
+    var launchOptionsError: String?
+
+    func refreshSteam() {
+        steamGames = Steam.games()
+        steamLaunchOptions = Steam.launchOptions(for: steamGames)
+    }
+
+    func setFrameCap(_ fps: Int, for game: Steam.Game) {
+        editLaunchOptions([(game.id, { FrameCap.apply(fps, to: $0) })],
+                          done: fps > 0 ? "\(game.name) is capped at \(fps) fps on D3DMetal."
+                                        : "\(game.name) has no D3DMetal cap.")
+    }
+
+    /// True when every one of those games already has what `setUpMoltenVK` adds.
+    func moltenVKIsSetUp(for build: MoltenVKLibrary.KnownBuild) -> Bool {
+        let games = steamGames(for: build)
+        return !games.isEmpty && build.steamApps.filter { app in games.contains { $0.id == app.id } }.allSatisfy { app in
+            let options = steamLaunchOptions[app.id] ?? ""
+            return LaunchOptions.settingUpMoltenVK(in: options, argument: app.argument) == options
+        }
+    }
+
+    /// The installed games a MoltenVK build was made for.
+    func steamGames(for build: MoltenVKLibrary.KnownBuild) -> [Steam.Game] {
+        steamGames.filter { game in build.steamApps.contains { $0.id == game.id } }
+    }
+
+    /// Gives those games the launch options they need to use the build under NotProton.
+    func setUpMoltenVK(for build: MoltenVKLibrary.KnownBuild) {
+        let games = steamGames(for: build)
+        let edits = build.steamApps.filter { app in games.contains { $0.id == app.id } }.map { app in
+            (app.id, { LaunchOptions.settingUpMoltenVK(in: $0, argument: app.argument) })
+        }
+        editLaunchOptions(edits, done: "")
+    }
+
+    /// Rewrites games' launch options, closing Steam first when it is open and reopening it
+    /// afterwards.
+    private func editLaunchOptions(_ edits: [(app: String, edit: (String) -> String)], done: String) {
+        launchOptionsBusy = true
+        launchOptionsError = nil
+        launchOptionsMessage = nil
+        Task { @MainActor in
+            defer { launchOptionsBusy = false; refreshSteam() }
+            let wasRunning = !Steam.running.isEmpty
+            if wasRunning {
+                launchOptionsMessage = "Waiting for Steam to quit…"
+                Steam.running.forEach { $0.terminate() }
+                for _ in 0..<60 where !Steam.running.isEmpty { try? await Task.sleep(for: .milliseconds(500)) }
+            }
+            do {
+                try Steam.editLaunchOptions(edits)
+                launchOptionsMessage = done.isEmpty ? nil : done
+            } catch {
+                launchOptionsMessage = nil
+                launchOptionsError = error.localizedDescription
+            }
+            if wasRunning, Steam.running.isEmpty,
+               let steam = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Steam.bundleIdentifier) {
+                NSWorkspace.shared.open(steam)
+            }
+        }
+    }
+
     // MARK: Inputs
 
     /// Takes file URLs from the pasteboard (⌘V after copying in Finder) and routes them like a drop.
@@ -186,6 +361,12 @@ final class PatchEngine {
 
     func setCrossOver(_ url: URL) {
         guard !isRunning else { return }
+        // A patched CrossOver whose patch NotProton's copy lacks is brought level straight away.
+        defer {
+            refreshInstalledVersions()
+            refreshNotProton()
+            if notProtonIsBehind { updateNotProton() }
+        }
         crossOverURL = url
         crossOverInstructions = nil
         if case .cancelled = phase { phase = .idle }
@@ -213,6 +394,7 @@ final class PatchEngine {
         crossOverURL = nil
         crossOverStatus = .empty
         crossOverInstructions = nil
+        refreshNotProton()
     }
 
     func refreshPatchedApps() {
@@ -301,10 +483,16 @@ final class PatchEngine {
         toolkitStatus = toolkits.isEmpty ? .empty : .ok(selectedToolkit?.version ?? "")
     }
 
-    /// Reads the D3DMetal that this patch will leave in the app, once per selection rather than per
-    /// redraw: the chosen toolkit's, or the app's own when the toolkit is being left alone.
     /// The D3DMetal the selected CrossOver already has, read when it was chosen.
     private(set) var installedD3DMetal: String?
+    /// The DXMT in the selected CrossOver, for the tile's label.
+    private(set) var installedDXMT: String?
+
+    /// Read when the selection is set, since an in-place patch changes them without changing it.
+    private func refreshInstalledVersions() {
+        installedD3DMetal = crossOver?.installedD3DMetalVersion
+        installedDXMT = crossOver?.installedDXMTVersion
+    }
 
     /// Installing a toolkit older than the one already in the app. Legitimate, but never silent.
     var downgradeNotice: String? {
@@ -313,9 +501,8 @@ final class PatchEngine {
         return "This CrossOver already has D3DMetal \(installed). The toolkit you chose is \(chosen), which is older, and patching replaces the newer one. Its original is kept and can be put back."
     }
 
-    /// This app has patched the selected CrossOver before. Patching such a copy again in place is
-    /// the ordinary way to move it to a newer toolkit, and costs nothing a fresh patch would not
-    /// have already cost it.
+    /// This app has patched the selected CrossOver before, so patching it again in place is
+    /// how it is updated.
     var crossOverIsAlreadyPatched: Bool { crossOverSelection?.hasPatchBackup == true }
 
     // MARK: DXMT library
@@ -468,7 +655,8 @@ final class PatchEngine {
         }
         let request = PatchRequest(
             crossOver: crossOver, toolkit: selectedToolkit, dxmt: selectedDXMT, moltenVK: selectedMoltenVK,
-            mode: mode, renameInPlace: renamePatchedApp,
+            mode: mode, renameInPlace: forNotProton ? false : renamePatchedApp,
+            moveToApplications: !forNotProton,
             destination: mode == .inPlace ? crossOver.url : outputURL,
             applicationsFolder: applicationsFolder,
             replaceExisting: false, graphics: graphics, bottles: [])
@@ -505,6 +693,8 @@ final class PatchEngine {
     func reset() {
         guard !isBusy else { return }
         phase = .idle
+        launchOptionsMessage = nil
+        launchOptionsError = nil
         refreshToolkits()
         refreshPatchedApps()
     }
@@ -540,7 +730,7 @@ final class PatchEngine {
         if nsError.domain == NSCocoaErrorDomain {
             switch CocoaError.Code(rawValue: nsError.code) {
             case .fileWriteNoPermission, .fileReadNoPermission:
-                return Failure(title: title, message: "You don't have permission to write to \(folder). Choose a different location and try again.")
+                return Failure(title: title, message: "macOS did not let this app change files in \(folder). Allow GPTK Patcher Tool under App Management in Privacy & Security, then try again.", needsPermission: true)
             case .fileWriteOutOfSpace:
                 return Failure(title: title, message: "There isn't enough free space in \(folder).")
             case .fileWriteVolumeReadOnly:
@@ -551,7 +741,7 @@ final class PatchEngine {
             }
         }
         if posix == Int(EACCES) || posix == Int(EPERM) {
-            return Failure(title: title, message: "You don't have permission to write to \(folder). Choose a different location and try again.")
+            return Failure(title: title, message: "macOS did not let this app change files in \(folder). Allow GPTK Patcher Tool under App Management in Privacy & Security, then try again.", needsPermission: true)
         }
         if posix == Int(ENOSPC) {
             return Failure(title: title, message: "There isn't enough free space in \(folder).")
@@ -568,7 +758,7 @@ final class PatchEngine {
                 return Failure(title: title, message: "There isn't enough free space in \(folder).")
             }
             if detail.contains("permission denied") || detail.contains("operation not permitted") {
-                return Failure(title: title, message: "Some files couldn't be written. Make sure you have permission to write to \(folder) and that CrossOver isn't open.")
+                return Failure(title: title, message: "Some files couldn't be written. Allow GPTK Patcher Tool under App Management in Privacy & Security, make sure CrossOver isn't open, then try again.", needsPermission: true)
             }
             if command.hasPrefix("/bin/cp") || command.hasPrefix("/usr/bin/ditto") {
                 return Failure(title: title, message: "CrossOver couldn't be copied. Make sure it isn't being moved or modified, then try again.")

@@ -17,6 +17,9 @@ struct PatchRequest: Sendable {
     /// Whether an in-place patch renames the app after what it carries. Off keeps the path that
     /// aliases, Dock entries, launchers and existing bottle sessions already point at.
     var renameInPlace = true
+    /// Whether an in-place patch outside Applications is moved into it. Off for NotProton, which
+    /// tracks a CrossOver it was given by its path.
+    var moveToApplications = true
     /// Where the copy goes (`.copy` mode). For `.inPlace` this is the source app itself.
     let destination: URL
     /// Applications folder an in-place patched app is moved into when it lives somewhere like Downloads.
@@ -347,9 +350,8 @@ struct PatchJob {
         try token.checkpoint()
         rollback = nil
 
-        // 7. In-place patches get the toolkit version in their name, like duplicates do. CrossOver's
-        //    helpers find it by bundle identifier, so the rename is safe; a taken name is left alone.
-        //    Preflight requires its bottle sessions to be stopped before files or paths change.
+        // 7. An in-place patch keeps its name unless renaming was asked for. CrossOver's helpers
+        //    find the app by bundle identifier, so a rename is safe; a taken name is left alone.
         var finalURL = dst
         if request.mode == .inPlace, !request.renameInPlace {
             log("Kept the name \(dst.lastPathComponent): renaming would change the path aliases and bottle sessions point at.")
@@ -373,7 +375,7 @@ struct PatchJob {
 
         // 8. A CrossOver patched where it was downloaded belongs in Applications, as CrossOver itself
         //    offers on first launch. Move it there unless something with that name is already there.
-        if request.mode == .inPlace, !isInApplicationsFolder(finalURL) {
+        if request.mode == .inPlace, request.moveToApplications, !isInApplicationsFolder(finalURL) {
             let target = request.applicationsFolder.appendingPathComponent(finalURL.lastPathComponent)
             if fm.fileExists(atPath: target.path) {
                 log("Left in \(finalURL.deletingLastPathComponent().path): \(target.lastPathComponent) already exists in \(request.applicationsFolder.path).")

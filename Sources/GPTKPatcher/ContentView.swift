@@ -8,44 +8,53 @@ struct ContentView: View {
     @State private var showLog = false
     @State private var showWhatChanges = false
     @State private var showSupportNotice = false
-    @AppStorage("acknowledgedSupportNotice") private var acknowledgedSupportNotice = false
+    @State private var windowTargeted = false
+    @AppStorage("acknowledgedSupportNotice2") private var acknowledgedSupportNotice = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let width: CGFloat = 760
+    private let width: CGFloat = 920
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-                .padding(.bottom, isChoosing ? 26 : 30)
-            if isChoosing {
-                modePicker.padding(.bottom, engine.mode == .inPlace ? 10 : 26)
-                if engine.mode == .inPlace {
-                    inPlaceWarning.padding(.bottom, 8)
-                    Toggle("Rename it to show what it carries", isOn: $engine.renamePatchedApp)
-                        .toggleStyle(.checkbox)
-                        .font(.callout)
-                        .disabled(engine.isBusy)
-                        .help("Off keeps the app's current name and path, which is what aliases, the Dock and existing bottle sessions point at")
-                        .padding(.bottom, 20)
+            if engine.destination == nil {
+                ChoiceView(engine: engine)
+            } else {
+                header
+                    .padding(.bottom, isChoosing ? 30 : 34)
+                if isChoosing { options }
+                Group {
+                    switch engine.phase {
+                    case .idle, .cancelled: form
+                    case .running(let step): progress(step)
+                    case .done(let url): success(url)
+                    case .failed(let failure): failed(failure)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .top)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: engine.phase)
             }
-
-            Group {
-                switch engine.phase {
-                case .idle, .cancelled: form
-                case .running(let step): progress(step)
-                case .done(let url): success(url)
-                case .failed(let failure): failed(failure)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .top)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: engine.phase)
         }
-        .padding(.horizontal, 30)
-        .padding(.top, 30)
-        .padding(.bottom, 26)
+        .padding(.horizontal, 36)
+        .padding(.top, 34)
+        .padding(.bottom, 32)
         .frame(width: width)
         .fixedSize(horizontal: false, vertical: true)
+        // Anywhere in the window works, not only the tile a file belongs to. A tile under the
+        // pointer takes the drop first, so dropping on one still reads as landing there.
+        .dropDestination(for: URL.self) { urls, _ in
+            var accepted = false
+            for url in urls where engine.route(url) { accepted = true }
+            return accepted
+        } isTargeted: { windowTargeted = $0 }
+        .overlay {
+            if windowTargeted && !engine.isBusy {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.accentColor, lineWidth: 2)
+                    .padding(4)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .background(GeometryReader { proxy in
             Color.clear.onChange(of: proxy.size.height, initial: true) { _, height in contentHeight = height }
         })
@@ -59,6 +68,8 @@ struct ContentView: View {
             engine.refreshToolkits()
             engine.refreshDXMT()
             engine.refreshMoltenVK()
+            engine.refreshNotProton()
+            engine.selectNotProtonsCrossOver()
             engine.refreshPatchedApps()
             DebugHooks.apply(to: engine)
         }
@@ -74,20 +85,43 @@ struct ContentView: View {
     // MARK: Header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("GPTK Patcher Tool")
-                .font(.title2.weight(.semibold))
-            // The subtitle tells you what the form in front of you will do. Once the patch is
-            // running or finished it is describing something you are no longer choosing.
-            if isChoosing {
-                Text(engine.mode == .copy
-                     ? "Update the Game Porting Toolkit in a copy of CrossOver."
-                     : "Update the Game Porting Toolkit in your CrossOver.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("GPTK Patcher Tool")
+                    .font(.title2.weight(.semibold))
+                // The subtitle tells you what the screen in front of you will do. Once a patch is
+                // running or finished it is describing something you are no longer choosing.
+                if isChoosing {
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 16)
+            // Where the games run, not what to do about it. Switching is rare, so it sits out of
+            // the way as a menu rather than taking a row of the window.
+            if isChoosing, let place = engine.destination {
+                // Back to the question, where what can and cannot be chosen is spelled out.
+                Button("\(place.title) · Change") { engine.destination = nil }
+                    .buttonStyle(.link)
+                    .font(.callout)
+                    .disabled(engine.isBusy)
+                    .help("Change what you are patching")
             }
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var subtitle: String {
+        switch engine.destination {
+        case .none: return "A newer Game Porting Toolkit, DXMT and MoltenVK."
+        case .notProton: return engine.notProtonHasCopy
+            ? "NotProton's CrossOver is already selected. Choose what to update."
+            : "Update the toolkit in the CrossOver NotProton uses."
+        case .crossOver: return engine.mode == .copy
+            ? "Update the Game Porting Toolkit in a copy of CrossOver."
+            : "Update the Game Porting Toolkit in your CrossOver."
+        }
     }
 
     /// The form is on screen: idle, or back from a cancelled patch.
@@ -112,27 +146,78 @@ struct ContentView: View {
         // describe the wrong segment half the time. The subtitle above states the current mode.
     }
 
-    /// What in-place patching costs, said before the choice rather than in the log afterwards.
-    /// A copy this app has already patched has paid all of it, and updating it in place is the
-    /// ordinary thing to do, so it gets a note rather than a warning.
+    /// What sits above the tiles: the NotProton status line, or the mode and what it costs.
+    @ViewBuilder private var options: some View {
+        if engine.forNotProton {
+            notProtonStatus
+        } else {
+            modePicker.padding(.bottom, engine.mode == .inPlace ? 14 : 30)
+            if engine.mode == .inPlace {
+                inPlaceWarning.padding(.bottom, 12)
+                Toggle("Rename the app to show its toolkit version", isOn: $engine.renamePatchedApp)
+                    .toggleStyle(.checkbox)
+                    .font(.callout)
+                    .disabled(engine.isBusy)
+                    .help("Off keeps the app's current name and path, which is what aliases, the Dock and existing bottle sessions point at")
+                    .padding(.bottom, 26)
+            }
+        }
+    }
+
+    /// A line for NotProton only when there is something to do or to know. The usual case,
+    /// the CrossOver it already uses, needs none.
+    @ViewBuilder private var notProtonStatus: some View {
+        if let rival = engine.notProtonRival {
+            statusLine("exclamationmark.triangle.fill", .orange,
+                       "NotProton will use \(rival.deletingPathExtension().lastPathComponent) instead. It lists one CrossOver per build, and that one comes first.") {
+                Button("Patch That One") { engine.setCrossOver(rival) }.controlSize(.small)
+            }
+        } else if engine.crossOver == nil {
+            statusLine("info.circle.fill", .secondary,
+                       "Add the CrossOver that NotProton uses, or the one you plan to give it.") { EmptyView() }
+        } else if engine.notProtonIsBehind, !engine.notProtonUpdating, let error = engine.notProtonUpdateError {
+            // Only when bringing NotProton's copy level did not work, with the reason.
+            statusLine("exclamationmark.triangle.fill", .orange, error) {
+                Button("Try Again", action: engine.updateNotProton).controlSize(.small)
+            }
+        } else if !engine.notProtonHasCopy {
+            statusLine("checkmark.circle.fill", .green,
+                       "After patching, set this CrossOver up in NotProton.") { EmptyView() }
+        }
+    }
+
+    private func statusLine<Trailing: View>(_ symbol: String, _ tint: Color, _ text: String,
+                                            @ViewBuilder trailing: () -> Trailing) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: symbol).foregroundStyle(tint)
+            Text(text).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            trailing()
+        }
+        .font(.callout)
+        .padding(.bottom, 28)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// What in-place patching costs. A copy this app already patched gets a note instead.
     @ViewBuilder
     private var inPlaceWarning: some View {
         if engine.crossOverIsAlreadyPatched {
             Label {
-                Text("This copy was patched by this app, so patching it again in place is how you update it. Its original CrossOver is untouched either way.")
+                Text("Already patched by this app. Patching again updates it.")
             } icon: {
                 Image(systemName: "info.circle.fill").foregroundStyle(.secondary)
             }
-            .font(.caption)
+            .font(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         } else {
             Label {
-                Text("CrossOver updates itself, and an update replaces the whole app: the toolkit, the backups and this patch all go. The app is also re-signed locally, so macOS asks again for permissions it had granted. A duplicate leaves your CrossOver untouched and can be re-patched the same way later.")
+                Text("A CrossOver update removes the patch, and macOS will ask for its permissions again.")
             } icon: {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             }
-            .font(.caption)
+            .font(.callout)
             .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -141,9 +226,9 @@ struct ContentView: View {
 
     private var form: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Equal thirds: each tile takes the same width whatever it happens to be showing.
-            HStack(alignment: .top, spacing: 14) {
-                FileTile(label: "CrossOver", prompt: "Drop CrossOver.app here",
+            // Equal widths: each tile takes the same room whatever it happens to be showing.
+            HStack(alignment: .top, spacing: 16) {
+                FileTile(label: engine.forNotProton ? "NotProton's CrossOver" : "CrossOver", prompt: "Drop CrossOver.app here",
                          contentType: .applicationBundle, fileExtension: "app",
                          url: engine.crossOverURL, status: engine.crossOverStatus,
                          onPick: { engine.route($0) }, onClear: engine.clearCrossOver)
@@ -152,11 +237,9 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                 DXMTTile(engine: engine)
                     .frame(maxWidth: .infinity)
+                MoltenVKTile(engine: engine)
+                    .frame(maxWidth: .infinity)
             }
-
-            // Always shown. These carry choices of their own, and hiding them behind a warning
-            // about CrossOver or the toolkit takes a chosen build off the screen.
-            BetaRow(engine: engine).padding(.top, 16)
 
             if let instructions = engine.crossOverInstructions {
                 Label {
@@ -190,46 +273,43 @@ struct ContentView: View {
             }
 
             if engine.mode == .copy {
-                destinationRow.padding(.top, 26)
+                destinationRow.padding(.top, 32)
             }
 
-            if showsOutputSection {
-                if engine.mode == .copy { Divider().padding(.vertical, 15) }
-                outputSection.padding(.top, engine.mode == .copy ? 0 : 28)
+            if !engine.forNotProton, !engine.patchedApps.isEmpty {
+                patchedList.padding(.top, 30)
             }
 
-            actionBar.padding(.top, 24)
+            actionBar.padding(.top, 30)
         }
     }
 
-    /// True once there is either a result to preview or an app that has already been patched.
+    /// True once the copy this patch will make has a real name.
     private var showsPlannedOutput: Bool {
         engine.mode == .copy && engine.crossOver != nil && engine.hasSomethingToInstall
     }
-    private var showsOutputSection: Bool { showsPlannedOutput || !engine.patchedApps.isEmpty }
 
-    private var outputSection: some View {
+    private var patchedList: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(showsPlannedOutput ? "Output" : "Already Patched")
+            SectionLabel("Already Patched Versions")
             ScrollView {
-              VStack(spacing: 0) {
-                if showsPlannedOutput {
-                    PlannedOutputRow(name: engine.outputName, sourceIcon: engine.crossOverURL)
+                VStack(spacing: 0) {
+                    ForEach(Array(engine.patchedApps.enumerated()), id: \.element.id) { index, app in
+                        if index > 0 { Divider().padding(.leading, 14) }
+                        PatchedAppRow(app: app, onForget: {
+                            PatchedAppRegistry.forget(app.url)
+                            engine.refreshPatchedApps()
+                        })
+                    }
                 }
-                ForEach(Array(engine.patchedApps.enumerated()), id: \.element.id) { index, app in
-                    if index > 0 || showsPlannedOutput { Divider().padding(.leading, 14) }
-                    PatchedAppRow(app: app, onForget: {
-                        PatchedAppRegistry.forget(app.url)
-                        engine.refreshPatchedApps()
-                    })
-                }
-              }
             }
-            .frame(height: CGFloat(min(engine.patchedApps.count + (showsPlannedOutput ? 1 : 0), 3)) * 54)
+            .frame(height: CGFloat(min(engine.patchedApps.count, 3)) * 54)
             .modifier(InputTileChrome(targeted: false, isEmpty: false, isError: false, cornerRadius: 10))
         }
     }
 
+    /// Where the copy goes: the folder alone until the inputs are chosen, then the full path
+    /// with the name it will get.
     private var destinationRow: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionLabel("Save patched copy to")
@@ -253,7 +333,6 @@ struct ContentView: View {
         }
     }
 
-    /// The folder alone until both inputs are chosen; the full path once the name is real.
     private var destinationText: String {
         let url = showsPlannedOutput ? engine.outputURL : engine.outputFolder
         return url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
@@ -269,7 +348,8 @@ struct ContentView: View {
             }
             Spacer()
             if !engine.logLines.isEmpty { Button("Details…") { showLog = true } }
-            Button("Patch CrossOver", action: engine.patch)
+            if engine.forNotProton { FrameCapButton(engine: engine) }
+            Button(engine.forNotProton ? "Patch NotProton" : "Patch CrossOver", action: engine.patch)
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
                 .disabled(!engine.isReady)
@@ -288,14 +368,14 @@ struct ContentView: View {
         }
         .buttonStyle(.link)
         .font(.callout)
-        .popover(isPresented: $showWhatChanges, arrowEdge: .top) { WhatChangesPopover(mode: engine.mode) }
+        .popover(isPresented: $showWhatChanges, arrowEdge: .top) { WhatChangesPopover(mode: engine.mode, forNotProton: engine.forNotProton) }
     }
 
     // MARK: Running
 
     private func progress(_ current: PatchStep) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(engine.isCancelling ? "Cancelling and restoring files…" : "Patching CrossOver…")
+            Text(engine.isCancelling ? "Cancelling and restoring files…" : engine.forNotProton ? "Patching NotProton…" : "Patching CrossOver…")
                 .font(.headline)
                 .padding(.bottom, 4)
             Text(current == .signing ? "Preparing the modified app for local use and checking its signature." : " ")
@@ -352,11 +432,9 @@ struct ContentView: View {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 34))
                     .foregroundStyle(.green)
-                Text("CrossOver patched successfully")
+                Text(engine.forNotProton ? "NotProton patched successfully" : "CrossOver patched successfully")
                     .font(.title3.weight(.semibold))
-                Text(engine.mode == .copy
-                     ? "Open it like any other app. Your original CrossOver was not changed."
-                     : "The stock toolkit was kept as apple_gptk.stock inside the app.")
+                Text(successDetail(url))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -409,17 +487,55 @@ struct ContentView: View {
             }
             .modifier(InputTileChrome(targeted: false, isEmpty: false, isError: false, cornerRadius: 10))
 
+            if let build = engine.selectedMoltenVK?.catalogue {
+                SetupNote(engine: engine, build: build).padding(.top, 14)
+            }
+
             HStack {
                 Button("Details…") { showLog = true }
                 Spacer()
+                if engine.forNotProton { FrameCapButton(engine: engine) }
                 Button("Done", action: engine.reset)
                     .keyboardShortcut(.cancelAction)
-                Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+                if engine.notProtonUpdating {
+                    ProgressView().controlSize(.small)
+                } else if engine.notProtonIsBehind {
+                    Button("Try Again", action: engine.updateNotProton)
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                } else if engine.forNotProton, !engine.notProtonHasCopy, let notProton = NotProton.appURL {
+                    Button("Open NotProton") { NSWorkspace.shared.open(notProton) }
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                } else if engine.forNotProton {
+                    if let steam = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Steam.bundleIdentifier) {
+                        Button("Open Steam") { NSWorkspace.shared.open(steam) }
+                            .keyboardShortcut(.defaultAction)
+                            .buttonStyle(.borderedProminent)
+                    }
+                } else {
+                    Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                }
             }
             .padding(.top, 24)
         }
+    }
+
+    private func successDetail(_ url: URL) -> String {
+        guard engine.forNotProton else {
+            return engine.mode == .copy
+                ? "Open it like any other app. Your original CrossOver was not changed."
+                : "The stock toolkit was kept as apple_gptk.stock inside the app."
+        }
+        if engine.notProtonUpdating { return "Updating NotProton's copy…" }
+        if engine.notProtonIsBehind {
+            return engine.notProtonUpdateError ?? "NotProton's copy has not been updated yet."
+        }
+        return engine.notProtonHasCopy
+            ? "NotProton's copy is updated. Games use it from their next launch."
+            : "One step left. Open NotProton and set up \(url.deletingPathExtension().lastPathComponent)."
     }
 
     // MARK: Failed
@@ -450,6 +566,11 @@ struct ContentView: View {
             HStack {
                 Button("Details…") { showLog = true }
                 Spacer()
+                if failure.needsPermission {
+                    Button("Open Privacy Settings") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles")!)
+                    }
+                }
                 Button("Try Again", action: engine.reset)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
@@ -473,517 +594,3 @@ struct ContentView: View {
 }
 
 // MARK: - Supporting views
-
-private struct WhatChangesPopover: View {
-    let mode: PatchMode
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("What patching does").font(.headline)
-            if mode == .copy {
-                bullet("Duplicates CrossOver.app. On an APFS disk the duplicate shares storage with the original until files change, so it is quick and takes little space.")
-            } else {
-                bullet("Modifies the selected CrossOver.app directly and adds the toolkit version to its name. Quit CrossOver before patching it.")
-            }
-            bullet("Replaces the app's built-in D3DMetal with the version from the toolkit, keeping the original as apple_gptk.stock so the change can be undone. Set the toolkit to Unchanged to skip it and update only DXMT.")
-            bullet("Adds the nvngx.dll that games with DLSS look for, and turns DLSS to MetalFX on for every bottle the app launches.")
-            bullet("Checks the original app's signature, then signs and verifies the modified app for local use. Its embedded libraries retain their signatures. The local copy's download metadata is cleared so macOS can open it from this location.")
-            bullet("Replaces the bundled MoltenVK, the Vulkan driver, when a build is chosen. That is what Doom, Wolfenstein and Detroit: Become Human need. Every copy the app ships is replaced, each original kept as libMoltenVK.dylib.stock, and a build is refused if it does not match the architecture CrossOver needs. Metal argument buffers are turned on at the same time, without which those games' lighting shaders fail to compile and the screen stays black.")
-            bullet("Replaces the bundled DXMT when a build is chosen, keeping the original as dxmt.stock. Anything a DXMT release leaves out, such as the ARM64 files CrossOver Preview ships, is carried over.")
-            bullet("Leaves a receipt inside the app. That is how it appears in the Patched list, where the gear sets a frame rate cap, the Metal Performance HUD, and Metal 4.")
-            bullet("Each toolkit you add is stored in ~/Library/Application Support/GPTKPatcher so you can switch between versions later.")
-            Text("A patched CrossOver is not supported by CodeWeavers.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 2)
-        }
-        .padding(16)
-        .frame(width: 380)
-    }
-
-    private func bullet(_ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("•").foregroundStyle(.secondary)
-            Text(text).font(.callout).fixedSize(horizontal: false, vertical: true)
-        }
-    }
-}
-
-private struct LogSheet: View {
-    let lines: [String]
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Details").font(.headline)
-            ScrollView {
-                Text(lines.joined(separator: "\n"))
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(height: 240)
-            HStack {
-                Button("Copy") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
-                }
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(20)
-        .frame(width: 520)
-    }
-}
-
-/// Makes the window draggable by its background and keeps it at its content size.
-/// Keeps the window exactly as tall as the content. The window is not user-resizable, so nothing
-/// resizes it when a section such as Advanced opens; this does.
-private struct WindowConfigurator: NSViewRepresentable {
-    let contentHeight: CGFloat
-    let width: CGFloat
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
-            window.isMovableByWindowBackground = true
-            window.titlebarAppearsTransparent = true
-            window.styleMask.remove(.resizable)
-            window.standardWindowButton(.zoomButton)?.isEnabled = false
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        let latest = context.coordinator
-        latest.height = contentHeight
-        guard contentHeight > 0 else { return }
-        fit(nsView, to: latest)
-        // Heights reported while a section is animating open are part-way values, so take the
-        // settled one shortly after as well.
-        guard !latest.checking else { return }
-        latest.checking = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            latest.checking = false
-            fit(nsView, to: latest)
-        }
-    }
-
-    func makeCoordinator() -> Latest { Latest() }
-
-    final class Latest {
-        var height: CGFloat = 0
-        var checking = false
-    }
-
-    private func fit(_ nsView: NSView, to latest: Latest) {
-        DispatchQueue.main.async {
-            guard let window = nsView.window, latest.height > 0,
-                  abs(window.frame.height - latest.height) > 0.5 else { return }
-            // Grow downwards from the title bar rather than from the bottom edge.
-            var frame = window.frame
-            frame.origin.y += frame.height - latest.height
-            frame.size = NSSize(width: width, height: latest.height)
-            window.setFrame(frame, display: true, animate: false)
-        }
-    }
-}
-
-/// Environment-variable hooks for screenshots and testing. They do nothing unless set.
-///   GPTKPATCHER_CROSSOVER=<path>  GPTKPATCHER_DMG=<path>  GPTKPATCHER_OUTPUT=<folder>
-///   GPTKPATCHER_PASTE=1  GPTKPATCHER_AUTOPATCH=1  GPTKPATCHER_OPEN_SETTINGS=1  GPTKPATCHER_SKIP_NOTICE=1
-///   GPTKPATCHER_APPEARANCE=light|dark
-enum DebugHooks {
-    @MainActor
-    static func apply(to engine: PatchEngine) {
-        #if DEBUG
-        let env = ProcessInfo.processInfo.environment
-        if let appearance = env["GPTKPATCHER_APPEARANCE"] {
-            NSApp.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
-        }
-        if let path = env["GPTKPATCHER_CROSSOVER"] { engine.setCrossOver(URL(fileURLWithPath: path)) }
-        if env["GPTKPATCHER_PASTE"] == "1" { engine.pasteFromPasteboard() }
-        if let path = env["GPTKPATCHER_OUTPUT"] { engine.useTemporaryOutputFolder(URL(fileURLWithPath: path)) }
-        if let path = env["GPTKPATCHER_DMG"] {
-            engine.importToolkit(from: URL(fileURLWithPath: path))
-            if env["GPTKPATCHER_AUTOPATCH"] == "1" {
-                Task { @MainActor in
-                    let deadline = Date().addingTimeInterval(120)
-                    while !engine.isReady, Date() < deadline { try? await Task.sleep(for: .milliseconds(100)) }
-                    if engine.isReady { engine.patch() }
-                }
-            }
-        }
-        #endif
-    }
-}
-
-/// Acknowledged once; the same support information remains available in What changes.
-private struct SupportNoticeSheet: View {
-    let onContinue: () -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 18) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 64, height: 64)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Before You Begin")
-                    .font(.title3.weight(.semibold))
-                Text("Replacing the Game Porting Toolkit that CrossOver ships with is not supported by CodeWeavers. A patched CrossOver, whether it is a copy or your installed app, falls outside their support terms.")
-                    .font(.body)
-                Text("If you run into a problem, reproduce it with an unmodified CrossOver before contacting CodeWeavers support.")
-                    .font(.body)
-                HStack {
-                    Spacer()
-                    Button("Quit") { NSApp.terminate(nil) }
-                    Button("Continue") { onContinue(); dismiss() }
-                        .keyboardShortcut(.defaultAction)
-                        .buttonStyle(.borderedProminent)
-                }
-                .padding(.top, 10)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.top, 24)
-        .padding(.bottom, 20)
-        .padding(.horizontal, 24)
-        .frame(width: 480)
-        .interactiveDismissDisabled()
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Before you begin")
-    }
-}
-
-private struct PatchedAppRow: View {
-    let app: PatchedApp
-    let onForget: () -> Void
-    @State private var showSettings = false
-    @State private var repairing = false
-    @State private var repairResult = ""
-    @State private var showRepairResult = false
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 32, height: 32)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(app.url.deletingPathExtension().lastPathComponent)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if app.patchReplaced {
-                    Text("CrossOver updated itself and replaced the patch. Patch it again to put it back.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text("GPTK \(app.gptkVersion) · \(app.folderDescription)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            Spacer(minLength: 8)
-            Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([app.url]) }
-                .controlSize(.small)
-            Button { showSettings.toggle() } label: {
-                Image(systemName: "gearshape")
-            }
-            .controlSize(.small)
-            .help("Options: frame rate cap and Metal HUD")
-            .accessibilityLabel("Options for \(app.name)")
-            .disabled(repairing)
-            .popover(isPresented: $showSettings, arrowEdge: .bottom) { PatchedAppSettings(app: app) }
-        }
-        .padding(.leading, 12)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
-        .contextMenu {
-            Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([app.url]) }
-            Button("Options…") { showSettings = true }
-            Button(repairing ? "Repairing Launch…" : "Repair Launch", action: repairLaunch).disabled(repairing)
-            Divider()
-            Button("Remove from List") { onForget() }
-        }
-        .alert("Launch repair", isPresented: $showRepairResult) {
-            Button("OK", role: .cancel) {}
-        } message: { Text(repairResult) }
-    }
-
-    private func repairLaunch() {
-        guard !repairing else { return }
-        repairing = true
-        let location = app.url
-        Task {
-            let result = await Task.detached { () -> Result<Void, Error> in
-                Result { try AppSigning.repair(CrossOverBundle(url: location), log: { _ in }) }
-            }.value
-            repairing = false
-            switch result {
-            case .success: repairResult = "The patched app's local signature has been repaired and verified. Open it from this location."
-            case .failure(let error): repairResult = error.localizedDescription
-            }
-            showRepairResult = true
-        }
-    }
-}
-
-/// Answers the Edit ▸ Paste command (⌘V) for the window when no text field has focus, so files
-/// copied in Finder can be pasted straight into the patcher.
-private struct PasteCatcher: NSViewRepresentable {
-    let onPaste: () -> Void
-
-    func makeNSView(context: Context) -> PasteView {
-        let view = PasteView()
-        view.onPaste = onPaste
-        DispatchQueue.main.async { view.window?.initialFirstResponder = view; view.window?.makeFirstResponder(view) }
-        return view
-    }
-    func updateNSView(_ nsView: PasteView, context: Context) { nsView.onPaste = onPaste }
-
-    final class PasteView: NSView {
-        var onPaste: () -> Void = {}
-        override var acceptsFirstResponder: Bool { true }
-        @objc func paste(_ sender: Any?) { onPaste() }
-        override func validateProposedFirstResponder(_ responder: NSResponder, for event: NSEvent?) -> Bool { true }
-        override func responds(to aSelector: Selector!) -> Bool {
-            if aSelector == #selector(paste(_:)) {
-                return NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
-            }
-            return super.responds(to: aSelector)
-        }
-    }
-}
-
-/// The result a patch will produce, shown before it runs so the outcome is never implied to exist.
-private struct PlannedOutputRow: View {
-    let name: String
-    let sourceIcon: URL?
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: sourceIcon?.path ?? "/Applications"))
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 32, height: 32)
-                .opacity(0.5)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name.hasSuffix(".app") ? String(name.dropLast(4)) : name)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text("Will be created when you patch")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 8)
-        }
-        .padding(.leading, 12)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Output: \(name), will be created when you patch")
-    }
-}
-
-/// One optional component: DXMT or MoltenVK. Empty it invites a file; with builds in the
-/// library it becomes a menu of them. Both sit side by side under the two main tiles.
-private struct ExtraRow<MenuItems: View>: View {
-    let label: String
-    let status: DropStatus
-    /// The chosen build's name, or nil when this component is being left alone.
-    let title: String?
-    let hasLibrary: Bool
-    /// False greys the row out: it is shown so the option is discoverable, with `prompt` saying
-    /// what it would take to use it.
-    var enabled = true
-    let prompt: String
-    let help: String
-    let onAdd: () -> Void
-    let onClear: () -> Void
-    let onDrop: ([URL]) -> Bool
-    @ViewBuilder let menuItems: () -> MenuItems
-
-    @State private var targeted = false
-    @State private var hovering = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        HStack(spacing: 8) {
-            control.disabled(!enabled)
-            trailing
-        }
-        .padding(.trailing, 8)
-        // Fixed height normally, but an error has to be readable, so the row grows for one.
-        .frame(minHeight: 38)
-        .modifier(InputTileChrome(targeted: targeted, hovering: hovering, isEmpty: title == nil, isError: isError))
-        .onHover { hovering = $0 }
-        .dropDestination(for: URL.self) { urls, _ in onDrop(urls) } isTargeted: { targeted = $0 }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: targeted)
-        .help(help)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(label)
-    }
-
-    private var isError: Bool { if case .failed = status { return true } else { return false } }
-
-    /// The menu or the add button, stretched across the row so a click anywhere in the pill lands
-    /// on it rather than only on the words.
-    @ViewBuilder
-    private var control: some View {
-        switch status {
-        case .checking:
-            row { Text("Adding…").foregroundStyle(.secondary).lineLimit(1) }
-        case .failed(let text):
-            row {
-                Text(text)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                    .help(text)
-            }
-        case .empty, .ok:
-            if title != nil || hasLibrary {
-                Menu {
-                    menuItems()
-                } label: {
-                    row {
-                        Text(title ?? "Unchanged")
-                            .foregroundStyle(title == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-            } else {
-                Button(action: onAdd) {
-                    row {
-                        Text(targeted ? "Release to add" : prompt)
-                            .foregroundStyle(targeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    /// The row's own label, then the value, then all the empty space to the right of it.
-    private func row<Value: View>(@ViewBuilder _ value: () -> Value) -> some View {
-        HStack(spacing: 8) {
-            SectionLabel(label)
-            HStack(spacing: 4) { value() }
-            Spacer(minLength: 4)
-        }
-        .padding(.leading, 12)
-        .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-        .contentShape(Rectangle())
-    }
-
-    @ViewBuilder
-    private var trailing: some View {
-        switch status {
-        case .checking: ProgressView().controlSize(.small)
-        case .failed:
-            Button(action: onClear) {
-                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).font(.system(size: 13))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss")
-        case .empty: EmptyView()
-        case .ok:
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 13))
-                .accessibilityHidden(true)
-        }
-    }
-}
-
-/// A different MoltenVK, which runs Vulkan games. Beta because it replaces a translation layer
-/// CrossOver relies on, and has been tried on far fewer machines than the toolkit swap has.
-private struct BetaRow: View {
-    @Bindable var engine: PatchEngine
-
-    var body: some View {
-        ExtraRow(label: "MoltenVK",
-                 status: engine.moltenVKStatus,
-                 title: engine.selectedMoltenVK?.displayName,
-                 hasLibrary: !engine.moltenVKBuilds.isEmpty,
-                 prompt: "Drop a build",
-                 help: "Replaces CrossOver's Vulkan driver, which runs Doom, Wolfenstein and Detroit: Become Human. Drop a libMoltenVK.dylib, or the .zip it came in.",
-                 onAdd: openPanel,
-                 onClear: engine.clearMoltenVK,
-                 onDrop: { urls in
-                     var accepted = false
-                     for url in urls where engine.route(url) { accepted = true }
-                     return accepted
-                 }) {
-            Picker("MoltenVK build", selection: Binding(
-                get: { engine.selectedMoltenVK },
-                set: { if let build = $0 { engine.selectMoltenVK(build) } else { engine.clearMoltenVK() } })) {
-                    Text("Unchanged").tag(MoltenVKBuild?.none)
-                    ForEach(engine.moltenVKBuilds) { build in
-                        Text(build.menuTitle).tag(Optional(build))
-                    }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            Divider()
-            Button("Add MoltenVK Build…", action: openPanel)
-            if let build = engine.selectedMoltenVK {
-                Text(build.detail)
-                // A build that ships with the app is not the user's to remove.
-                if !build.isBuiltIn {
-                    Button("Remove \(build.displayName) from Library", role: .destructive) { engine.removeMoltenVK(build) }
-                }
-            }
-        }
-    }
-
-    private func openPanel() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.message = "Choose a MoltenVK build (libMoltenVK.dylib, or the archive it came in)"
-        if panel.runModal() == .OK, let url = panel.url {
-            guard MoltenVKLibrary.looksLikeBuild(url) else {
-                engine.moltenVKStatus = .failed("Not a MoltenVK build (.dylib or archive).")
-                return
-            }
-            engine.importMoltenVK(from: url)
-        }
-    }
-}
-
-
-/// Both optional components replace a translation layer CrossOver relies on, and both have been
-/// tried on far fewer machines than the toolkit swap has.
-struct BetaTag: View {
-    var body: some View {
-        Text("beta")
-            .font(.system(size: 9, weight: .semibold))
-            .padding(.horizontal, 5)
-            .padding(.vertical, 1)
-            .background(Capsule().fill(Color.secondary.opacity(0.18)))
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("beta")
-    }
-}
-
-

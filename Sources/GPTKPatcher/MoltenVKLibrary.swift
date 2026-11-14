@@ -21,6 +21,10 @@ struct MoltenVKBuild: Identifiable, Hashable, Sendable {
 
     var displayName: String { catalogue?.title ?? name }
 
+    /// What the game still needs after the library is in place. The library is only half of
+    /// what makes Doom start; the other half is a launch option.
+    var setupNote: String? { catalogue?.setup }
+
     /// What the build is and what it is for, for the menu and the row underneath it.
     var detail: String {
         var parts: [String] = []
@@ -52,6 +56,14 @@ enum MoltenVKLibrary {
         let games: String
         /// Short enough for the patched app's name.
         let tag: String
+        /// A step left to the person, because it lives in Steam or in the game rather than in
+        /// CrossOver. nil when the build is all a game needs.
+        let setup: String?
+        /// The launch option that step asks for.
+        var launchOption: String?
+        /// The Steam games the build is for, and the argument each needs. Under NotProton these
+        /// also get the MoltenVK settings as launch options, since it reads no CrossOver config.
+        var steamApps: [(id: String, argument: String?)] = []
     }
 
     /// Matched loosely, because a build keeps the name of the file or folder it arrived in and
@@ -60,9 +72,15 @@ enum MoltenVKLibrary {
         let lower = name.lowercased()
         // Checked longest first: "doometernal" also contains "doom".
         let catalogue: [(key: String, build: KnownBuild)] = [
-            ("doometernal", KnownBuild(title: "Doom Eternal build", games: "Doom Eternal", tag: "DOOM Eternal")),
-            ("detroit", KnownBuild(title: "Detroit build", games: "Detroit: Become Human", tag: "Detroit")),
-            ("standard", KnownBuild(title: "Standard build", games: "Doom (2016) · Wolfenstein II", tag: "DOOM + Wolf"))
+            ("doometernal", KnownBuild(title: "Doom Eternal build", games: "Doom Eternal", tag: "DOOM Eternal",
+                                       setup: nil, steamApps: [("782330", nil)])),
+            ("detroit", KnownBuild(title: "Detroit build", games: "Detroit: Become Human", tag: "Detroit",
+                                   setup: "Detroit also needs its own game-side fixes. Follow the MoltenVK-Detroit instructions.",
+                                   steamApps: [("1222140", nil)])),
+            ("standard", KnownBuild(title: "Standard build", games: "Doom (2016) · Wolfenstein II", tag: "DOOM + Wolf",
+                                    setup: "Doom (2016) needs +r_renderapi 1 in its Steam launch options, or it starts in OpenGL and quits. Wolfenstein II needs nothing.",
+                                    launchOption: "+r_renderapi 1",
+                                    steamApps: [("379720", "+r_renderapi 1"), ("612880", nil)]))
         ]
         return catalogue.first { lower.contains($0.key) }?.build
     }
