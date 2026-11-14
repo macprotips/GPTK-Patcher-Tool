@@ -43,25 +43,20 @@ DXMT. The included build covers Doom and Wolfenstein. Detroit needs
 it downloads as, plus the game-side fixes in their instructions.
 
 The first launch after a swap sits on a black screen for a few minutes while shaders compile.
-Launch Steam games through Steam, and give Doom `+r_renderAPI 1`.
+Doom also needs `+r_renderapi 1` in its Steam launch options.
 
 ## NotProton
 
-Set up a version of CrossOver in NotProton first. Then choose **NotProton** when the app asks what
-you are patching. The CrossOver that NotProton uses is selected for you and cannot be changed.
-Pick the versions and click **Patch NotProton**.
+Set up a CrossOver in NotProton first, then choose **NotProton** when the app opens. The CrossOver
+NotProton uses is selected for you. Pick the versions and click **Patch NotProton**. NotProton's
+own copy is updated too.
 
-NotProton runs games from its own copy of CrossOver, so patching updates that copy too. Only the
-files this app patched are replaced, and never while a game is running.
+Patching in a MoltenVK build also sets up the launch options its games need, and **D3DMetal Frame
+Rate Cap** caps any Steam game. Both change Steam's launch options, which needs Steam to restart,
+or show the text to paste in yourself. The DXMT cap is in NotProton's panel in Steam.
 
-Patching in a MoltenVK build also gives its games the launch options they need. If Steam is
-open, the app shows them to copy, or adds them after restarting Steam.
-
-**D3DMetal Frame Rate Cap** adds the cap to a game's Steam launch options, restarting Steam to save
-it. The DXMT cap is in NotProton's panel in Steam. D3DMetal runs on NotProton's Rosetta tool only.
-
-Patching can break games. Report those problems here, not to the NotProton developers. To reset
-NotProton, use **Remove Everything** in the NotProton app, then set it up again.
+Patching can break games. Don't report those problems to the NotProton developers. To reset, use
+**Remove Everything** in NotProton and set it up again.
 
 ## Undo
 
