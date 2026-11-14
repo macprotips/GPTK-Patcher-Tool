@@ -112,8 +112,8 @@ enum DXMTLibrary {
         return DXMTBuild(version: version, path: target, importedAt: Date(), sourceName: archive.lastPathComponent)
     }
 
-    static func remove(_ build: DXMTBuild) throws {
-        guard build.path.path.hasPrefix(directory.path) else { return }
+    static func remove(_ build: DXMTBuild, directory: URL = Self.directory) throws {
+        guard FileSafety.contains(build.path, in: directory) else { return }
         try FileManager.default.removeItem(at: build.path)
     }
 

@@ -15,6 +15,8 @@ struct FileTile: View {
     let status: DropStatus
     let onPick: (URL) -> Void
     let onClear: () -> Void
+    /// The tile's own file chooser, for a tile whose file the default one cannot pick.
+    var choose: (() -> Void)?
 
     @State private var targeted = false
     @State private var hovering = false
@@ -33,7 +35,7 @@ struct FileTile: View {
     }
 
     private var tile: some View {
-        Button(action: openPanel) {
+        Button(action: choose ?? openPanel) {
             Group {
                 if url == nil { emptyContent } else { selectedContent }
             }
@@ -46,7 +48,7 @@ struct FileTile: View {
         .overlay(alignment: .topTrailing) { badge.padding(10) }
         .onHover { hovering = $0 }
         .dropDestination(for: URL.self) { urls, _ in
-            let accepted = urls.filter { ["app", "dmg"].contains($0.pathExtension.lowercased()) || DXMTLibrary.looksLikeArchive($0) }
+            let accepted = urls.filter { PatchEngine.input(for: $0) != nil }
             for url in accepted { onPick(url) }
             return !accepted.isEmpty
         } isTargeted: { targeted = $0 }

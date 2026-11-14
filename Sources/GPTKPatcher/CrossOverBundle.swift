@@ -45,13 +45,22 @@ struct CrossOverBundle: Sendable {
         self.hasARM64Wine = fm.isDirectory(shared.appendingPathComponent("lib/wine/aarch64-unix"))
     }
 
+    /// True for an app GPTK Patcher patched: its receipt says so, and an original that a patch
+    /// replaced is still kept inside the app as `.stock`. A patch can replace the toolkit, DXMT,
+    /// MoltenVK or any mix of them, so any one of those backups counts.
     var hasPatchBackup: Bool {
-        guard let directory = try? gptkDirectory(),
-              FileManager.default.isDirectory(directory.appendingPathExtension("stock")),
-              let data = try? Data(contentsOf: url.appendingPathComponent(PatchedAppRegistry.receiptPath)),
-              let receipt = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return (receipt["tool"] as? String)?.hasPrefix("GPTKPatcher ") == true
-            && receipt["gptkD3DMetalVersion"] is String
+        guard let data = try? Data(contentsOf: url.appendingPathComponent(PatchedAppRegistry.receiptPath)),
+              let receipt = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (receipt["tool"] as? String)?.hasPrefix("GPTKPatcher ") == true else { return false }
+        if receipt["gptkD3DMetalVersion"] is String, let directory = try? gptkDirectory(),
+           FileManager.default.isDirectory(directory.appendingPathExtension("stock")) { return true }
+        // The receipt records each backup relative to the app.
+        var kept = [receipt["stockBackup"], receipt["dxmtStock"]].compactMap { $0 as? String }
+        kept += ((receipt["moltenVKSlots"] as? [String]) ?? []).map { $0 + ".stock" }
+        return kept.contains { relative in
+            let backup = url.appendingPathComponent(relative)
+            return FileSafety.contains(backup, in: url) && FileSafety.exists(backup)
+        }
     }
 
     func executableURL() throws -> URL {

@@ -270,7 +270,7 @@ struct ContentView: View {
 
             if engine.isImporting {
                 HStack {
-                    Text(engine.isCancelling ? "Cancelling import…" : "Importing toolkit…")
+                    Text(engine.isCancelling ? "Cancelling import…" : "Importing \(engine.importingComponent ?? "the toolkit")…")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button("Cancel Import", action: engine.cancel).disabled(engine.isCancelling)
@@ -539,7 +539,7 @@ struct ContentView: View {
         guard engine.forNotProton else {
             return engine.mode == .copy
                 ? "Open it like any other app. Your original CrossOver was not changed."
-                : "The stock toolkit was kept as apple_gptk.stock inside the app."
+                : "Each original it replaced was kept beside its replacement inside the app, as .stock."
         }
         if engine.notProtonUpdating { return "Updating NotProton's copy…" }
         if engine.notProtonIsBehind {

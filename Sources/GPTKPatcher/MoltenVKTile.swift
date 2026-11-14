@@ -22,7 +22,8 @@ struct MoltenVKTile: View {
                      contentType: .data, fileExtension: "dylib",
                      url: engine.importingMoltenVK,
                      status: engine.moltenVKStatus,
-                     onPick: { engine.route($0) }, onClear: engine.clearMoltenVK)
+                     onPick: { engine.route($0, preferring: .moltenVK) }, onClear: engine.clearMoltenVK,
+                     choose: openPanel)
         }
     }
 
@@ -97,7 +98,7 @@ struct MoltenVKTile: View {
         .onHover { hovering = $0 }
         .dropDestination(for: URL.self) { urls, _ in
             var accepted = false
-            for url in urls where engine.route(url) { accepted = true }
+            for url in urls where engine.route(url, preferring: .moltenVK) { accepted = true }
             return accepted
         } isTargeted: { targeted = $0 }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: targeted)
