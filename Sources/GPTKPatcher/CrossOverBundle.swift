@@ -65,14 +65,6 @@ struct CrossOverBundle: Sendable {
         return executable
     }
 
-    private enum AppUsers {
-        case some([String]), none, unknown
-        init(active: Bool, found: [String]?) {
-            guard let found else { self = active ? .some([]) : .unknown; return }
-            if active || !found.isEmpty { self = .some(found) } else { self = .none }
-        }
-    }
-
     func requireNotRunning() throws {
         let active = NSRunningApplication.runningApplications(withBundleIdentifier: identifier).contains { app in
             guard !app.isTerminated, let path = app.bundleURL else { return false }
@@ -85,18 +77,37 @@ struct CrossOverBundle: Sendable {
                 && path.lastPathComponent == url.lastPathComponent
                 && (Bundle(url: path)?.infoDictionary?["CFBundleVersion"] as? String) == build
         }
-        let names = AppUsers(active: active, found: BottleEnv.processesUsingApp(url))
-        switch names {
-        case .none: return
-        case .unknown:
+        guard let running = BottleEnv.processesUsingApp(url) else {
+            if active { try explainRunning([]) }
             throw PatchError.io("Couldn't check whether \(url.lastPathComponent) is running, so nothing was changed. Quit it and any games or bottles it opened, then try again.")
-        case .some(let running):
-            // Naming them matters: "quit CrossOver" is no help when what is holding the app is a
-            // background program left behind by a bottle.
-            let list = running.isEmpty ? "" : " Still running: " + running.prefix(4).joined(separator: ", ")
-                + (running.count > 4 ? ", and \(running.count - 4) more." : ".")
-            throw PatchError.io("Quit \(url.lastPathComponent) and its running games or bottles before changing it. Save your progress first.\(list)")
         }
+        if active || !running.isEmpty { try explainRunning(running) }
+    }
+
+    /// Programs Wine runs for a bottle itself, not for anything the user opened.
+    private static let bottleServices: Set<String> = [
+        "services.exe", "plugplay.exe", "svchost.exe", "winedevice.exe", "rpcss.exe",
+        "explorer.exe", "conhost.exe", "rundll32.exe", "tabtip.exe", "wineserver",
+    ]
+
+    /// Throws the reason a patch has to wait, from what is still running from this app.
+    func explainRunning(_ running: [BottleEnv.AppProcess]) throws {
+        let name = url.deletingPathExtension().lastPathComponent
+        let programs = running.filter { !Self.bottleServices.contains($0.name.lowercased()) }
+        if !running.isEmpty, programs.isEmpty {
+            // A bottle keeps its services for a few seconds after the last program quits. Ones
+            // still there minutes later lost their wineserver and stay until they are quit.
+            if running.allSatisfy({ $0.seconds > 120 }) {
+                throw PatchError.leftoverServices(app: name, pids: running.map(\.pid))
+            }
+            throw PatchError.io("A \(name) bottle is still closing in the background. Wait a few seconds, then try again.")
+        }
+        // Naming them matters: "quit CrossOver" is no help when what is holding the app is a
+        // program left behind by a bottle.
+        let names = Array(Set(programs.map(\.name))).sorted()
+        let list = names.isEmpty ? "" : " Still running: " + names.prefix(4).joined(separator: ", ")
+            + (names.count > 4 ? ", and \(names.count - 4) more." : ".")
+        throw PatchError.io("Quit \(name) and any games or bottles it opened, then try again.\(list)")
     }
 
     /// Used when selecting a source and again immediately before patching. Never launches it.
@@ -137,8 +148,28 @@ struct CrossOverBundle: Sendable {
         return candidates.filter { fm.fileExists(atPath: $0.path) }
     }
 
+    /// False when macOS refuses changes to this app because App Management has not been allowed.
+    /// Opening a file for writing and closing it changes nothing, and is enough to be refused.
+    var allowsChanges: Bool {
+        let descriptor = open(url.appendingPathComponent("Contents/Info.plist").path, O_WRONLY)
+        guard descriptor >= 0 else { return errno != EPERM }
+        close(descriptor)
+        return true
+    }
+
     var installedD3DMetalVersion: String? {
         guard let dir = try? gptkDirectory() else { return nil }
         return D3DMetalInfo.read(inLib: dir).version
+    }
+
+    /// The release DXMT was built from, which it carries as a tag like `v0.72-25-gf35d839`.
+    var installedDXMTVersion: String? {
+        let dll = sharedSupport.appendingPathComponent("lib/dxmt/x86_64-windows/d3d11.dll")
+        guard let data = try? Data(contentsOf: dll, options: .mappedIfSafe) else { return nil }
+        let text = String(decoding: data, as: Unicode.ASCII.self)
+        let tag = try? NSRegularExpression(pattern: #"\x00v(\d+\.\d+(?:\.\d+)?)(?:-\d+-g[0-9a-f]+)?\x00"#)
+        guard let match = tag?.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[range])
     }
 }

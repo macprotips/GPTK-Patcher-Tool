@@ -23,7 +23,8 @@ enum PatchedAppRegistry {
     private static let key = "patchedApps"
     /// Apps removed from the list by the user; discovery would otherwise bring them straight back.
     private static let hiddenKey = "hiddenPatchedApps"
-    static let receiptPath = "Contents/SharedSupport/CrossOver/gptkpatcher-receipt.json"
+    static let receiptName = "gptkpatcher-receipt.json"
+    static let receiptPath = "Contents/SharedSupport/CrossOver/" + receiptName
 
     static func remember(_ url: URL) {
         var paths = UserDefaults.standard.stringArray(forKey: key) ?? []

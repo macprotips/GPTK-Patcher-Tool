@@ -25,7 +25,7 @@ enum FileSafety {
 }
 
 /// Serializes mutations across GUI and CLI processes; the OS releases the lock after a crash.
-/// ponytail: one lock for all apps/toolkits; use per-app locks only if concurrent patching is needed.
+/// One lock covers every app and toolkit, since nothing patches two at once.
 final class OperationLock {
     private var descriptor: Int32 = -1
     private static let stateLock = NSLock()

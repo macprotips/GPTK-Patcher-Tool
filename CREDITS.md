@@ -16,6 +16,12 @@ redistributed here; you supply your own copy and its licence travels with it.
 **DXMT** is [3Shain/dxmt](https://github.com/3Shain/dxmt), which translates Direct3D 11 to Metal.
 Releases are downloaded by you, not by this tool.
 
+**NotProton** is [NotProtonNot/NotProton](https://github.com/NotProtonNot/NotProton), GPL-3.0,
+which runs Windows Steam games in the Mac's Steam client out of a runner it copies from
+CrossOver. This tool patches that CrossOver and the same files in the runner. How it finds the
+runner, the lock it takes and what it stays away from were worked out by reading NotProton's
+source. None of that source is included here, and NotProton does not support a patched runner.
+
 ## The MoltenVK builds
 
 [MoltenVK](https://github.com/KhronosGroup/MoltenVK) is the Khronos Group's, Apache-2.0, and it
@@ -61,7 +67,6 @@ their own projects and you supply them yourself.
 
 ## This project
 
-The Swift app, its tests, the build script and the workflow are MIT; see [LICENSE](LICENSE).
-What is genuinely new here is not the fixes but the assembly: taking changes that were stranded on
-forks dozens of commits behind upstream, applying them to a current MoltenVK, and making the
-result reproducible, licensed and installable without a build toolchain.
+The Swift app, its tests, the build script and the workflow are MIT; see [LICENSE](LICENSE). The
+fixes are other people's. This project applies them to a current MoltenVK and makes the result
+reproducible, licensed and installable without a build toolchain.
