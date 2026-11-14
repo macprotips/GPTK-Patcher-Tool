@@ -121,6 +121,8 @@ enum PatchError: LocalizedError {
     case destinationExists(String)
     case command(String, CommandResult)
     case io(String)
+    /// Background services left running from a bottle that will not close by themselves.
+    case leftoverServices(app: String, pids: [Int32])
 
     var errorDescription: String? {
         switch self {
@@ -134,6 +136,8 @@ enum PatchError: LocalizedError {
             let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             return "`\(cmd)` exited with status \(result.status)\(detail.isEmpty ? "" : ": \(detail)")"
         case .io(let why): return why
+        case .leftoverServices(let app, _):
+            return "Background services from a \(app) bottle are still running, though nothing is open. They don't close by themselves. Quit them to continue."
         }
     }
 }

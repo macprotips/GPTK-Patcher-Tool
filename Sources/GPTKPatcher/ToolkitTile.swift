@@ -16,11 +16,11 @@ struct ToolkitTile: View {
     var body: some View {
         if showsLibrary {
             VStack(alignment: .leading, spacing: 8) {
-                SectionLabel("Game Porting Toolkit")
+                SectionLabel("Game Porting Toolkit", detail: engine.installedD3DMetal, strong: true)
                 libraryTile
             }
         } else {
-            FileTile(label: "Game Porting Toolkit", prompt: "Drop the toolkit .dmg here",
+            FileTile(label: "Game Porting Toolkit", labelDetail: engine.installedD3DMetal, prompt: "Drop the toolkit .dmg here",
                      contentType: .diskImage, fileExtension: "dmg",
                      url: engine.importingImage,
                      status: engine.toolkitStatus,
@@ -35,66 +35,63 @@ struct ToolkitTile: View {
     }
 
     private var libraryTile: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "externaldrive.fill")
-                .font(.system(size: 26))
-                .foregroundStyle(Color.accentColor.opacity(targeted ? 1 : 0.85))
-                .frame(width: 40, height: 40)
-            VStack(alignment: .leading, spacing: 3) {
-                Menu {
-                    Picker("Toolkit version", selection: selection) {
-                        Text("Unchanged").tag(Toolkit?.none)
-                        ForEach(engine.toolkits) { toolkit in
-                            Text(toolkit.displayName).tag(Optional(toolkit))
-                        }
-                    }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                    Divider()
-                    Button("Add Toolkit…", action: openPanel)
-                    if let toolkit = engine.selectedToolkit {
-                        Button("Remove \(toolkit.displayName) from Library", role: .destructive) { engine.removeToolkit(toolkit) }
-                    }
-                } label: {
+        // The whole tile is the menu, so a click anywhere on it opens the list.
+        Menu {
+            Picker("Toolkit version", selection: selection) {
+                Text("Unchanged").tag(Toolkit?.none)
+                ForEach(engine.toolkits) { toolkit in
+                    Text(toolkit.displayName).tag(Optional(toolkit))
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+            Divider()
+            Button("Add Toolkit…", action: openPanel)
+            if let toolkit = engine.selectedToolkit {
+                Button("Remove \(toolkit.displayName) from Library", role: .destructive) { engine.removeToolkit(toolkit) }
+            }
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                TileGlyph(symbol: "gamecontroller.fill", highlighted: targeted)
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 5) {
-                        Text(engine.selectedToolkit?.displayName ?? "Not replacing GPTK")
+                        Text(engine.selectedToolkit?.displayName ?? "Unchanged")
                             .font(.body.weight(.medium))
                             .foregroundStyle(engine.selectedToolkit == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                         Image(systemName: "chevron.down")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
                     }
-                    .contentShape(Rectangle())
+                    if let toolkit = engine.selectedToolkit {
+                        let caption = targeted ? "Release to add this image to the library" : detail(for: toolkit)
+                        Text(caption)
+                            .font(.caption)
+                            .foregroundStyle(targeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .help(caption)
+                    } else {
+                        Text("This CrossOver keeps its own toolkit")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Choose a toolkit version, add another, or remove one")
-                .accessibilityLabel("Toolkit version")
-                .accessibilityValue(engine.selectedToolkit?.displayName ?? "none")
-                if let toolkit = engine.selectedToolkit {
-                    let caption = targeted ? "Release to add this image to the library" : detail(for: toolkit)
-                    Text(caption)
-                        .font(.caption)
-                        .foregroundStyle(targeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .help(caption)
-                } else {
-                    Text("This CrossOver keeps its own toolkit")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .padding(.leading, 14)
+            .padding(.trailing, 14)
+            .frame(maxWidth: .infinity)
+            .frame(height: FileTile.height)
+            .contentShape(Rectangle())
         }
-        .padding(.leading, 14)
-        .padding(.trailing, 14)
-        .frame(maxWidth: .infinity)
-        .frame(height: FileTile.height)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .help("Choose a toolkit version, add another, or remove one")
+        .accessibilityLabel("Toolkit version")
+        .accessibilityValue(engine.selectedToolkit?.displayName ?? "none")
         .modifier(InputTileChrome(targeted: targeted, hovering: hovering, isEmpty: false, isError: false))
         .overlay(alignment: .topTrailing) {
             if engine.selectedToolkit != nil {

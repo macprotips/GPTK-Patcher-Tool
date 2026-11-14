@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 /// icon, name and validation line. Drag-over, hover, error and checking states are all on this view.
 struct FileTile: View {
     let label: String
+    /// Shown after the label in parentheses.
+    var labelDetail: String?
     var beta = false
     let prompt: String
     let contentType: UTType
@@ -23,7 +25,7 @@ struct FileTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                SectionLabel(label)
+                SectionLabel(label, detail: labelDetail, strong: true)
                 if beta { BetaTag() }
             }
             tile
@@ -169,9 +171,19 @@ struct FileTile: View {
 /// Section label used above every group in the window.
 struct SectionLabel: View {
     let text: String
-    init(_ text: String) { self.text = text }
+    /// Shown after the text in parentheses, such as the version a tile's CrossOver holds now.
+    var detail: String?
+    /// A tile's name is heavier than a plain section heading; its detail never is.
+    var strong = false
+
+    init(_ text: String, detail: String? = nil, strong: Bool = false) {
+        self.text = text
+        self.detail = detail
+        self.strong = strong
+    }
+
     var body: some View {
-        Text(text)
+        (Text(text).fontWeight(strong ? .semibold : .regular) + Text(detail.map { " (\($0))" } ?? ""))
             .font(.subheadline)
             .foregroundStyle(.secondary)
     }
@@ -207,5 +219,52 @@ struct InputTileChrome: ViewModifier {
         if targeted { return .accentColor }
         if isError { return .red.opacity(0.6) }
         return Color(nsColor: .separatorColor)
+    }
+}
+
+/// Both optional components replace a translation layer CrossOver relies on, and both have been
+/// tried on far fewer machines than the toolkit swap has.
+struct BetaTag: View {
+    var body: some View {
+        Text("beta")
+            .font(.system(size: 9, weight: .semibold))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Color.secondary.opacity(0.18)))
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("beta")
+    }
+}
+
+/// The mark on a component tile: a rounded square with letters or a symbol cut out of it.
+struct TileGlyph: View {
+    var text: String?
+    var symbol: String?
+    var highlighted = false
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.accentColor.opacity(highlighted ? 1 : 0.85))
+            Group {
+                if let text {
+                    // Two short lines stack, as DX over MT. Each line gets a fixed height, so
+                    // the gap between them is set here and not by the font's own leading.
+                    let lines = text.split(separator: "\n").map(String.init)
+                    let stacked = lines.count > 1
+                    VStack(spacing: 2) {
+                        ForEach(lines, id: \.self) { Text($0).frame(height: stacked ? 11 : 22) }
+                    }
+                    .font(.system(size: stacked ? 13.5 : 17, weight: .black).width(.expanded))
+                } else if let symbol {
+                    Image(systemName: symbol).font(.system(size: 20.5, weight: .bold))
+                }
+            }
+            .blendMode(.destinationOut)
+        }
+        .compositingGroup()
+        .frame(width: 38, height: 38)
+        .frame(width: 40, height: 40)
+        .accessibilityHidden(true)
     }
 }

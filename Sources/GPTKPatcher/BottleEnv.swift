@@ -220,45 +220,55 @@ enum BottleEnv {
         return runningBottles().filter { $0.cxRoot.map { URL(fileURLWithPath: $0).standardizedFileURL.path == root } ?? false }
     }
 
-    /// Checks open files as well as executable paths, so orphaned Wine clients are included
-    /// even after their wineserver has exited. No processes are stopped by this check.
-    /// True when something is running out of this app, false when nothing is, and nil when the
-    /// question could not be answered: `ps` or `lsof` failing is not evidence either way, and
-    /// reporting it as "in use" told people to quit an app that was not running.
-    /// What is running out of this app, as names for a message that can be acted on: empty when
-    /// nothing is, nil when the question could not be answered. `ps` or `lsof` failing is not
-    /// evidence either way, and reporting that as "in use" told people to quit an app that was
-    /// not running.
-    static func processesUsingApp(_ app: URL) -> [String]? {
-        guard let list = try? Shell.run("/bin/ps", ["-axo", "pid=,comm="], timeout: 20) else { return nil }
+    struct AppProcess: Hashable, Sendable {
+        let pid: Int32
+        /// The program's file name: `services.exe`, not its whole Windows path.
+        let name: String
+        let seconds: Int
+    }
+
+    /// The processes running out of this app: empty when none, nil when `ps` or `lsof` failed and
+    /// the answer is unknown. Checks open files as well as executable paths, so orphaned Wine
+    /// clients count after their wineserver has exited. Stops nothing.
+    static func processesUsingApp(_ app: URL) -> [AppProcess]? {
+        guard let list = try? Shell.run("/bin/ps", ["-axo", "pid=,etime=,comm="], timeout: 20) else { return nil }
         let root = app.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        var candidates: [(pid: String, name: String)] = []
-        var found: [String] = []
+        var candidates: [AppProcess] = []
+        var found: [AppProcess] = []
         for line in list.stdout.split(separator: "\n") {
-            let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 1)
-            guard parts.count == 2, let pid = Int32(parts[0]), pid != getpid() else { continue }
-            let path = String(parts[1])
-            let name = (path as NSString).lastPathComponent
-            if path.hasPrefix(root) { found.append(name); continue }
+            let parts = line.trimmingCharacters(in: .whitespaces).split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+            guard parts.count == 3, let pid = Int32(parts[0]), pid != getpid() else { continue }
+            let path = String(parts[2]).trimmingCharacters(in: .whitespaces)
+            let name = String(path.split(whereSeparator: { "\\/".contains($0) }).last ?? Substring(path))
+            let process = AppProcess(pid: pid, name: name, seconds: elapsedSeconds(String(parts[1])))
+            if path.hasPrefix(root) { found.append(process); continue }
             let command = path.lowercased()
-            if command.hasSuffix(".exe") || command.contains("wine") { candidates.append((String(pid), name)) }
+            if command.hasSuffix(".exe") || command.contains("wine") { candidates.append(process) }
         }
-        guard !candidates.isEmpty else { return found.sorted() }
+        guard !candidates.isEmpty else { return found.sorted { $0.name < $1.name } }
         // Generous: lsof walks every open file of every candidate, and a machine running Steam
         // or a browser has thousands.
-        guard let files = try? Shell.run("/usr/sbin/lsof", ["-Fpn", "-p", candidates.map(\.pid).joined(separator: ",")],
+        guard let files = try? Shell.run("/usr/sbin/lsof", ["-Fpn", "-p", candidates.map { String($0.pid) }.joined(separator: ",")],
                                          timeout: 90) else { return nil }
         // lsof groups its output: a "p<pid>" line, then the files that process holds.
         var current: String?
         for line in files.stdout.split(separator: "\n") {
             if line.hasPrefix("p") { current = String(line.dropFirst()) }
             else if line.hasPrefix("n" + root), let pid = current,
-                    let match = candidates.first(where: { $0.pid == pid }) {
-                found.append(match.name)
+                    let match = candidates.first(where: { String($0.pid) == pid }) {
+                found.append(match)
                 current = nil
             }
         }
-        return Array(Set(found)).sorted()
+        return Array(Set(found)).sorted { $0.name < $1.name }
+    }
+
+    /// `ps` elapsed time, `[[dd-]hh:]mm:ss`, in seconds.
+    static func elapsedSeconds(_ text: String) -> Int {
+        let dayParts = text.split(separator: "-")
+        let days = dayParts.count == 2 ? Int(dayParts[0]) ?? 0 : 0
+        let clock = (dayParts.last ?? "").split(separator: ":").compactMap { Int($0) }
+        return days * 86_400 + clock.reduce(0) { $0 * 60 + $1 }
     }
 
     /// Ends everything in the bottle the way CrossOver's own Quit does, then makes sure of it.
@@ -367,11 +377,8 @@ enum DXMTConfig {
 struct GraphicsSettings: Sendable, Equatable {
     var fpsCap: Int? = nil
     var metalHUD = false
-    /// What a swapped-in MoltenVK build wants: a shader cache the Detroit build needs, and Metal
-    /// argument buffers. Without argument buffers Metal allows only 16 sampler slots, and the
-    /// lighting shaders in Doom and Wolfenstein II need more than that, so they fail to compile
-    /// and those passes never render. Only worth setting when a MoltenVK build is in use.
-    var moltenVKSettings = false
+    /// What the swapped-in MoltenVK build's games need, set only when one is installed.
+    var moltenVK: [String: String] = [:]
     var storeInCopy = true
 
     /// key → value; a nil value leaves whatever the file already has. DLSS → MetalFX is always on.
@@ -379,15 +386,13 @@ struct GraphicsSettings: Sendable, Equatable {
         [("D3DM_ENABLE_METALFX", "1"),
          ("DXMT_ENABLE_NVEXT", "1"),
          ("D3DM_MAX_FPS", fpsCap.map(String.init)),
-         ("MTL_HUD_ENABLED", metalHUD ? "1" : nil),
-         ("MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM", moltenVKSettings ? "3" : nil),
-         ("MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION", moltenVKSettings ? "1" : nil),
-         ("MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS", moltenVKSettings ? "1" : nil)]
+         ("MTL_HUD_ENABLED", metalHUD ? "1" : nil)]
+            + MoltenVKLibrary.allSettings.keys.sorted().map { ($0, moltenVK[$0]) }
     }
 
     var summary: String {
         "DLSS → MetalFX on" + (fpsCap.map { ", cap \($0) fps" } ?? "") + (metalHUD ? ", Metal HUD on" : "")
-            + (moltenVKSettings ? ", MoltenVK argument buffers and shader cache on" : "")
+            + (moltenVK.isEmpty ? "" : ", MoltenVK " + moltenVK.keys.sorted().joined(separator: ", "))
     }
 
     /// Human-readable outcome of `apply`.

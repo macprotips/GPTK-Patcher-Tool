@@ -7,6 +7,8 @@ final class StabilityTests: XCTestCase {
     private let fm = FileManager.default
 
     override func setUpWithError() throws {
+        // A remembered NotProton choice would put every new engine on that screen.
+        UserDefaults.standard.removeObject(forKey: "destination")
         root = fm.temporaryDirectory.appendingPathComponent("GPTKPatcher-tests-\(UUID().uuidString)")
         try fm.createDirectory(at: root, withIntermediateDirectories: false)
     }
@@ -49,6 +51,8 @@ final class StabilityTests: XCTestCase {
         try fm.createDirectory(at: app.appendingPathComponent("Contents/MacOS"), withIntermediateDirectories: true)
         try fm.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: app.appendingPathComponent("Contents/MacOS/Stub"))
         try payload(at: app.appendingPathComponent("Contents/SharedSupport/CrossOver/lib64/apple_gptk"), version: "3.0")
+        // The file NotProton fingerprints a CrossOver by.
+        _ = try write("loader", "CrossOver.app/Contents/SharedSupport/CrossOver/lib/wine/x86_64-unix/wine")
         _ = try write("[EnvironmentVariables]\n\"UNRELATED\" = \"keep\"\n", "CrossOver.app/Contents/SharedSupport/CrossOver/etc/CrossOver.conf")
         // CrossOver Preview ships aarch64 DXMT that upstream releases leave out.
         _ = try write("stock-x86", "CrossOver.app/Contents/SharedSupport/CrossOver/lib/dxmt/x86_64-windows/d3d11.dll")
@@ -232,7 +236,7 @@ final class StabilityTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: slot), expected, slot.path)
             XCTAssertTrue(fm.fileExists(atPath: slot.appendingPathExtension("stock").path), slot.path)
         }
-        // The two cache settings ride along with the build rather than needing their own switch.
+        // A build nobody recognises gets every setting, since what it needs is not known.
         let patched = try CrossOverBundle(url: result)
         XCTAssertEqual(CXConfig.value(of: "MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM", in: patched.globalConfig), "3")
         XCTAssertEqual(CXConfig.value(of: "MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION", in: patched.globalConfig), "1")
@@ -287,7 +291,7 @@ final class StabilityTests: XCTestCase {
         XCTAssertThrowsError(try PatchJob(request: request(CrossOverBundle(url: patched), kit, mode: .inPlace, moltenVK: second),
                                           log: { _ in },
                                           onStep: { if $0 == .signing { token.cancel() } }, token: token).run())
-        // The build that was working is back — not the stock library — and the stock is still kept.
+        // The build that was working is back, not the stock library, and the stock is still kept.
         for (index, slot) in mvkSlots(patched).enumerated() {
             XCTAssertEqual(try Data(contentsOf: slot), installed[index], slot.path)
             XCTAssertEqual(try Data(contentsOf: slot.appendingPathExtension("stock")), stocks[index], slot.path)
@@ -464,6 +468,18 @@ final class StabilityTests: XCTestCase {
         let recorded = try XCTUnwrap(PatchedAppRegistry.read(result))
         XCTAssertEqual(recorded.gptkVersion, "4.0b2")
         XCTAssertFalse(recorded.patchReplaced)
+        try assertSigned(result)
+    }
+
+    /// NotProton tracks a CrossOver it was given by path, so a patch made for it must leave the
+    /// app exactly where it is, even outside Applications.
+    func testAPatchForNotProtonLeavesTheAppWhereItIs() throws {
+        let (app, kit) = try fixture()
+        var req = request(app, kit, mode: .inPlace, renameInPlace: false)
+        req.moveToApplications = false
+        let result = try PatchJob(request: req, log: { _ in }).run()
+        XCTAssertEqual(result.standardizedFileURL, app.url.standardizedFileURL)
+        XCTAssertEqual(try CrossOverBundle(url: result).installedD3DMetalVersion, "4.0b2")
         try assertSigned(result)
     }
 
@@ -943,7 +959,7 @@ final class StabilityTests: XCTestCase {
                 let view = NSHostingView(rootView: ContentView(engine: engine, loadsData: false).environment(\.colorScheme, scheme))
                 view.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
                 let size = view.fittingSize
-                XCTAssertEqual(size.width, 760)
+                XCTAssertEqual(size.width, 920)
                 // Worst case is everything showing at once: copy mode with a full patched list.
                 // The floor is a 13-inch Mac at its default 1440x900, which leaves about 847
                 // points of window height under the menu bar and title bar.
@@ -1062,5 +1078,312 @@ XCTAssertLessThan(size.height, 840, "\(name) exceeds a typical laptop display he
             // Retain an explicitly requested integration artifact for manual launch checks.
             try fm.copyItem(at: repatched, to: URL(fileURLWithPath: output))
         }
+    }
+}
+
+extension StabilityTests {
+    /// NotProton is recognised by its support folder, which is what decides whether the window
+    /// says anything about it. A Mac without NotProton must never see that notice.
+    func testNotProtonIsRecognisedByItsSupportFolder() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("notproton-check-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("Library/Application Support/notproton")
+
+        XCTAssertFalse(NotProton.hasSupportFolder(at: support), "nothing is installed yet")
+
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        XCTAssertTrue(NotProton.hasSupportFolder(at: support), "the support folder is the signal")
+
+        // A file of that name is not an installation, so a stray download cannot trigger it.
+        try FileManager.default.removeItem(at: support)
+        XCTAssertTrue(FileManager.default.createFile(atPath: support.path, contents: Data()))
+        XCTAssertFalse(NotProton.hasSupportFolder(at: support), "a file is not an installation")
+    }
+}
+
+extension StabilityTests {
+    /// The window says different things depending on whether NotProton has a CrossOver linked,
+    /// so the build list has to be read correctly. A runner carrying a `+` was assembled from
+    /// variants over a base and is not a build of its own.
+    func testOnlyBaseRunnersCountAsLinkedBuilds() throws {
+        let fm = FileManager.default
+        let runners = fm.temporaryDirectory.appendingPathComponent("runners-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: runners) }
+        try fm.createDirectory(at: runners, withIntermediateDirectories: true)
+
+        XCTAssertEqual(NotProton.linkedBuilds(in: runners), [], "nothing is linked yet")
+
+        for name in ["crossover-27.0.0.41073",
+                     "crossover-27.0.0.41073-fex",
+                     "crossover-27.0.0.41073+GPTK4.0b3@abc123",   // assembled, not a build
+                     ".crossover-27.0.0.41073.removing",          // mid-removal
+                     "notes.txt"] {                               // not a runner at all
+            try fm.createDirectory(at: runners.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+
+        XCTAssertEqual(NotProton.linkedBuilds(in: runners),
+                       ["27.0.0.41073", "27.0.0.41073-fex"])
+    }
+}
+
+extension StabilityTests {
+    /// A stand-in CrossOver holding only what NotProton looks at: the name, and the Wine loader
+    /// it fingerprints to tell builds apart.
+    private func makeNotProtonCandidate(_ name: String, loader: String, in root: URL) throws -> URL {
+        let app = root.appendingPathComponent("\(name).app")
+        let unix = app.appendingPathComponent("Contents/SharedSupport/CrossOver/lib/wine/x86_64-unix")
+        try FileManager.default.createDirectory(at: unix, withIntermediateDirectories: true)
+        try Data(loader.utf8).write(to: unix.appendingPathComponent("wine"))
+        return app.resolvingSymlinksInPath()
+    }
+
+    /// NotProton lists one CrossOver per build and the first in its order wins, so a renamed
+    /// duplicate beside its original is never the one it copies from. Patching the duplicate
+    /// would change nothing, which is what the window has to catch before the patch.
+    func testADuplicateBesideItsOriginalIsNotTheOneNotProtonUses() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("np-apps-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: root) }
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let original = try makeNotProtonCandidate("CrossOver", loader: "build-26.3", in: root)
+        let duplicate = try makeNotProtonCandidate("CrossOver (GPTK 4.0b3)", loader: "build-26.3", in: root)
+        let preview = try makeNotProtonCandidate("CrossOver Preview", loader: "build-27", in: root)
+        // Not CrossOver by name, and not CrossOver inside: neither is a candidate.
+        try fm.createDirectory(at: root.appendingPathComponent("Steam.app"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: root.appendingPathComponent("CrossOver Notes.app"), withIntermediateDirectories: true)
+
+        // Preview builds first, then by name: the order its Status pane lists them in.
+        XCTAssertEqual(NotProton.discovered(in: [root]).map(\.lastPathComponent),
+                       ["CrossOver Preview.app", "CrossOver.app", "CrossOver (GPTK 4.0b3).app"])
+
+        // Same build: the original's shorter name sorts first, so it is the one NotProton
+        // copies from, and the only one of the pair offered for patching (NotProtonNot/NotProton#279).
+        let runners = root.appendingPathComponent("runners")
+        for (name, original) in [("26.3", "build-26.3"), ("27", "build-27")] {
+            let wine = runners.appendingPathComponent("crossover-\(name)/CrossOver/lib/wine/x86_64-unix/wine")
+            try fm.createDirectory(at: wine.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(original.utf8).write(to: wine)
+        }
+        XCTAssertEqual(NotProton.linkedApps(in: [root], runners: runners).map(\.path), [preview.path, original.path])
+        XCTAssertFalse(NotProton.linkedApps(in: [root], runners: runners).contains { $0.path == duplicate.path })
+        XCTAssertEqual(NotProton.linkedApps(in: [root], runners: root.appendingPathComponent("none")), [], "nothing set up yet")
+    }
+
+    /// A runner as NotProton leaves it: its own loader, with the original kept beside it.
+    private func runner(_ name: String, original: String = "loader") throws -> URL {
+        let wine = "runners/crossover-\(name)/CrossOver/lib/wine/x86_64-unix/wine"
+        _ = try write("notproton's", wine)
+        _ = try write(original, wine + ".notproton-orig")
+        return root.appendingPathComponent("runners/crossover-\(name)/CrossOver")
+    }
+
+    func testNotProtonsCopyIsFoundByTheLoaderNotTheVersionNumber() throws {
+        let (app, _) = try fixture()
+        let runners = root.appendingPathComponent("runners")
+        XCTAssertEqual(NotProton.runners(for: app.url, in: runners), [])
+        let arm = try runner("26.2-fex", original: "another loader")
+        XCTAssertEqual(NotProton.runners(for: app.url, in: runners), [], "same number, different CrossOver")
+        let own = try runner("26.2")
+        XCTAssertEqual(NotProton.runners(for: app.url, in: runners).map(\.path), [own.path])
+        XCTAssertNotEqual(arm.path, own.path)
+    }
+
+    func testAPatchReachesNotProtonsCopyAndLeavesItsOwnFilesAlone() throws {
+        let (app, kit) = try fixture()
+        let copy = try runner(app.build)
+        _ = try write("stale", "runners/crossover-\(app.build)/CrossOver/lib64/apple_gptk/old")
+        let other = try runner("\(app.build)-fex", original: "another loader")
+        let runners = root.appendingPathComponent("runners")
+
+        let result = try PatchJob(request: request(app, kit, mode: .inPlace, renameInPlace: false),
+                                  log: { _ in }).run()
+        XCTAssertThrowsError(try NotProton.update(from: result, in: runners, isRunning: { _ in true }), "a game is running")
+        XCTAssertFalse(fm.fileExists(atPath: copy.appendingPathComponent("gptkpatcher-receipt.json").path), "nothing changed")
+        XCTAssertTrue(try NotProton.update(from: result, in: runners, isRunning: { _ in false }))
+
+        XCTAssertEqual(D3DMetalInfo.read(inLib: copy.appendingPathComponent("lib64/apple_gptk")).version, "4.0b2")
+        XCTAssertEqual(D3DMetalInfo.read(inLib: copy.appendingPathComponent("lib64/apple_gptk.stock")).version, "3.0")
+        XCTAssertFalse(fm.fileExists(atPath: copy.appendingPathComponent("lib64/apple_gptk/old").path))
+        XCTAssertTrue(fm.fileExists(atPath: copy.appendingPathComponent("gptkpatcher-receipt.json").path))
+        XCTAssertEqual(try String(contentsOf: copy.appendingPathComponent("lib/wine/x86_64-unix/wine"), encoding: .utf8), "notproton's")
+        XCTAssertFalse(fm.fileExists(atPath: other.appendingPathComponent("gptkpatcher-receipt.json").path), "another CrossOver's runner is not touched")
+        let leftovers = try fm.subpathsOfDirectory(atPath: copy.path).filter { $0.hasSuffix(".new") || $0.hasSuffix(".old") }
+        XCTAssertEqual(leftovers, [])
+    }
+
+    func testNotProtonIsBehindUntilItsCopyIsUpdated() throws {
+        let (app, kit) = try fixture()
+        _ = try runner(app.build)
+        let runners = root.appendingPathComponent("runners")
+        XCTAssertFalse(NotProton.isBehind(app.url, runners: NotProton.runners(for: app.url, in: runners)), "nothing to carry over yet")
+        let result = try PatchJob(request: request(app, kit, mode: .inPlace, renameInPlace: false), log: { _ in }).run()
+        XCTAssertTrue(NotProton.isBehind(result, runners: NotProton.runners(for: result, in: runners)))
+        XCTAssertTrue(try NotProton.update(from: result, in: runners, isRunning: { _ in false }))
+        XCTAssertFalse(NotProton.isBehind(result, runners: NotProton.runners(for: result, in: runners)))
+    }
+
+    func testAFrameCapIsAddedChangedAndRemoved() throws {
+        XCTAssertEqual(FrameCap.apply(60, to: ""), "D3DM_MAX_FPS=60 %command%")
+        XCTAssertEqual(FrameCap.apply(60, to: "+r_renderapi 1"), "D3DM_MAX_FPS=60 %command% +r_renderapi 1")
+        let kept = #"CX_GRAPHICS_BACKEND=d3dmetal DXMT_CONFIG="d3d11.preferredMaxFrameRate=60" %command%"#
+        XCTAssertEqual(FrameCap.current(in: kept), 0, "DXMT's cap is NotProton's to set")
+        XCTAssertEqual(FrameCap.apply(30, to: FrameCap.apply(60, to: kept)), "D3DM_MAX_FPS=30 " + kept)
+        XCTAssertEqual(FrameCap.apply(0, to: FrameCap.apply(30, to: kept)), kept)
+        XCTAssertEqual(FrameCap.apply(0, to: FrameCap.apply(60, to: "")), "")
+        XCTAssertEqual(FrameCap.current(in: FrameCap.apply(144, to: "-windowed")), 144)
+        XCTAssertEqual(FrameCap.choices(including: 90), [30, 40, 60, 90, 120, 144])
+        XCTAssertEqual(FrameCap.apply(60, to: "NOTPROTON_ENV_D3DM_MAX_FPS=30 %command%"),
+                       "D3DM_MAX_FPS=60 NOTPROTON_ENV_D3DM_MAX_FPS=30 %command%", "a longer name is another variable")
+        let standard = try XCTUnwrap(MoltenVKLibrary.known(for: "MoltenVK-standard-v1.4.3")).settings
+        let vulkan = LaunchOptions.settingUpMoltenVK(in: "D3DM_MAX_FPS=60 %command%", settings: standard, argument: "+r_renderapi 1")
+        XCTAssertEqual(vulkan, "NOTPROTON_ENV_MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=1 D3DM_MAX_FPS=60 %command% +r_renderapi 1",
+                       "Doom and Wolfenstein need argument buffers only")
+        XCTAssertEqual(LaunchOptions.settingUpMoltenVK(in: vulkan, settings: standard, argument: "+r_renderapi 1"), vulkan, "twice changes nothing")
+        let detroit = try XCTUnwrap(MoltenVKLibrary.known(for: "MoltenVK-Detroit")).settings
+        XCTAssertEqual(LaunchOptions.moltenVKVariables(detroit).map(\.name),
+                       ["NOTPROTON_ENV_MVK_CONFIG_SHADER_COMPRESSION_ALGORITHM", "NOTPROTON_ENV_MVK_CONFIG_SHOULD_MAXIMIZE_CONCURRENT_COMPILATION",
+                        "NOTPROTON_ENV_MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS"], "Detroit keeps its shader cache settings")
+        XCTAssertEqual(LaunchOptions.adding("+r_renderapi 1", to: ""), "+r_renderapi 1")
+        XCTAssertEqual(LaunchOptions.adding("+r_renderapi 1", to: "D3DM_MAX_FPS=60 %command%"), "D3DM_MAX_FPS=60 %command% +r_renderapi 1")
+        XCTAssertEqual(LaunchOptions.adding("+r_renderapi 1", to: "+r_renderAPI 1 -x"), "+r_renderAPI 1 -x", "already there")
+    }
+
+    func testLaunchOptionsAreEditedInPlaceInSteamsSettings() throws {
+        let vdf = """
+            "UserLocalConfigStore"
+            {
+            \t"Software"
+            \t{
+            \t\t"Valve"
+            \t\t{
+            \t\t\t"Steam"
+            \t\t\t{
+            \t\t\t\t"apps"
+            \t\t\t\t{
+            \t\t\t\t\t"10"
+            \t\t\t\t\t{
+            \t\t\t\t\t\t"LaunchOptions"\t\t"\\"/a b/c\\" -x %command%"
+            \t\t\t\t\t}
+            \t\t\t\t\t"20"
+            \t\t\t\t\t{
+            \t\t\t\t\t\t"Playtime"\t\t"7"
+            \t\t\t\t\t}
+            \t\t\t\t}
+            \t\t\t}
+            \t\t}
+            \t}
+            \t"Other"
+            \t{
+            \t\t"apps"
+            \t\t{
+            \t\t}
+            \t}
+            }
+
+            """
+        XCTAssertEqual(VDF.launchOptions(for: "10", in: vdf), #""/a b/c" -x %command%"#)
+        XCTAssertNil(VDF.launchOptions(for: "20", in: vdf))
+
+        let config = try write(vdf, "userdata/1/config/localconfig.vdf")
+        XCTAssertThrowsError(try Steam.editLaunchOptions([("10", { FrameCap.apply(60, to: $0) })], config: config, steamIsRunning: true))
+        try Steam.editLaunchOptions(["10", "20", "30"].map { ($0, { FrameCap.apply(60, to: $0) }) }, config: config, steamIsRunning: false)
+        let edited = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertEqual(VDF.launchOptions(for: "10", in: edited),
+                       #"D3DM_MAX_FPS=60 "/a b/c" -x %command%"#)
+        XCTAssertEqual(VDF.values(of: "Playtime", in: edited), ["7"], "the rest of the file is kept")
+        let games = [Steam.Game(id: "10", name: "A"), Steam.Game(id: "20", name: "B"), Steam.Game(id: "30", name: "C")]
+        XCTAssertEqual(Steam.launchOptions(for: games, config: config).mapValues(FrameCap.current(in:)), ["10": 60, "20": 60, "30": 60])
+        XCTAssertEqual(edited.filter { $0 == "{" }.count, edited.filter { $0 == "}" }.count)
+        XCTAssertEqual(try String(contentsOf: config.appendingPathExtension("gptkpatcher.bak"), encoding: .utf8), vdf)
+
+        try Steam.editLaunchOptions([("20", { FrameCap.apply(0, to: $0) })], config: config, steamIsRunning: false)
+        XCTAssertEqual(Steam.launchOptions(for: games, config: config).mapValues(FrameCap.current(in:))["20"], 0)
+    }
+
+    func testTheFrameCapIsReadFromTheD3DMetalNotProtonRuns() throws {
+        let binary = "apple_gptk/external/D3DMetal.framework/Versions/A/D3DMetal"
+        let app = root.appendingPathComponent("CrossOver.app")
+        _ = try write("... D3DM_MAX_FPS ...", "CrossOver.app/Contents/SharedSupport/CrossOver/lib64/" + binary)
+        _ = try write("loader", "CrossOver.app/Contents/SharedSupport/CrossOver/lib/wine/x86_64-unix/wine")
+        let runners = root.appendingPathComponent("runners")
+        XCTAssertTrue(NotProton.hasFrameCap(app, runners: NotProton.runners(for: app, in: runners)), "no copy yet, so the app's own")
+        _ = try runner("26.2")
+        _ = try write("old", "runners/crossover-26.2/CrossOver/lib64/" + binary)
+        XCTAssertFalse(NotProton.hasFrameCap(app, runners: NotProton.runners(for: app, in: runners)), "NotProton's copy is what games run")
+    }
+
+    func testTheInstalledDXMTVersionIsReadFromItsTag() throws {
+        let (app, _) = try fixture()
+        XCTAssertNil(app.installedDXMTVersion, "no tag in it")
+        let dll = app.sharedSupport.appendingPathComponent("lib/dxmt/x86_64-windows/d3d11.dll")
+        try Data("junk\0v0.72-25-gf35d839\0more".utf8).write(to: dll)
+        XCTAssertEqual(app.installedDXMTVersion, "0.72")
+        try Data("junk\0v0.80\0more".utf8).write(to: dll)
+        XCTAssertEqual(app.installedDXMTVersion, "0.80")
+    }
+
+    func testAnUpdateWaitsForNotProtonsOwnLock() throws {
+        let (app, kit) = try fixture()
+        _ = try runner(app.build)
+        let runners = root.appendingPathComponent("runners")
+        let result = try PatchJob(request: request(app, kit, mode: .inPlace, renameInPlace: false), log: { _ in }).run()
+
+        // NotProton locks the folder its support folder sits in.
+        let held = open(root.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY)
+        XCTAssertEqual(flock(held, LOCK_EX | LOCK_NB), 0)
+        XCTAssertThrowsError(try NotProton.update(from: result, in: runners, isRunning: { _ in false }))
+        flock(held, LOCK_UN)
+        close(held)
+        XCTAssertTrue(try NotProton.update(from: result, in: runners, isRunning: { _ in false }))
+    }
+
+    func testLaunchOptionVariablesAreOnlyTouchedBeforeTheCommand() {
+        XCTAssertEqual(FrameCap.apply(30, to: #"D3DM_MAX_FPS="60" %command%"#), "D3DM_MAX_FPS=30 %command%")
+        XCTAssertEqual(FrameCap.current(in: "D3DM_MAX_FPS='60' %command%"), 60)
+        let argument = "%command% -set D3DM_MAX_FPS=60"
+        XCTAssertEqual(FrameCap.current(in: argument), 0, "after the command it is the game's own argument")
+        XCTAssertEqual(FrameCap.apply(0, to: argument), argument)
+        XCTAssertEqual(FrameCap.apply(0, to: "D3DM_MAX_FPS=60 %COMMAND%"), "")
+    }
+
+    func testLaunchOptionsAreInsertedWhateverTheFilesLineEndings() throws {
+        let unix = "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n\t{\n\t\t\"Valve\"\n\t\t{\n\t\t\t\"Steam\"\n\t\t\t{\n"
+            + "\t\t\t\t\"apps\"\n\t\t\t\t{\n\t\t\t\t\t\"20\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"Playtime\"\t\t\"7\"\n\t\t\t\t\t}\n"
+            + "\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n}\n"
+        let oneLine = #""UserLocalConfigStore" { "Software" { "Valve" { "Steam" { "apps" { "20" { "Playtime" "7" } } } } } }"#
+        for file in [unix, unix.replacingOccurrences(of: "\n", with: "\r\n"), oneLine] {
+            for app in ["20", "30"] {
+                let options = "D3DM_MAX_FPS=60 \"a b\"\t%command%"
+                let edited = try XCTUnwrap(VDF.settingLaunchOptions(options, for: app, in: file))
+                XCTAssertEqual(VDF.launchOptions(for: app, in: edited), options, "quotes and tabs survive")
+                XCTAssertEqual(VDF.values(of: "Playtime", in: edited), ["7"])
+                XCTAssertEqual(edited.components(separatedBy: "UserLocalConfigStore").count, 2, "nothing is duplicated")
+                XCTAssertEqual(edited.contains("\r\n"), file.contains("\r\n"))
+                XCTAssertEqual(VDF.launchOptions(in: edited), [app: options])
+            }
+        }
+        XCTAssertNil(VDF.settingLaunchOptions("x", for: "20", in: "\"Other\" { }"), "no apps section, no write")
+    }
+
+    func testABottleStillClosingIsToldApartFromOneLeftBehind() throws {
+        let (app, _) = try fixture()
+        func process(_ path: String, _ seconds: Int) -> BottleEnv.AppProcess {
+            BottleEnv.AppProcess(pid: 1, name: String(path.split(separator: "\\").last!), seconds: seconds)
+        }
+        func failure(_ running: [BottleEnv.AppProcess]) -> Error? {
+            do { try app.explainRunning(running); return nil } catch { return error }
+        }
+        let closing = failure([process(#"C:\windows\system32\services.exe"#, 5), process(#"C:\windows\system32\plugplay.exe"#, 5)])
+        XCTAssertEqual(closing?.localizedDescription,
+                       "A CrossOver bottle is still closing in the background. Wait a few seconds, then try again.")
+        guard case PatchError.leftoverServices = try XCTUnwrap(failure([process("services.exe", 400_000)])) else {
+            return XCTFail("services running for days are left behind, not closing")
+        }
+        XCTAssertTrue(try XCTUnwrap(failure([process("svchost.exe", 5), process(#"C:\Games\DOOMx64vk.exe"#, 5)]))
+            .localizedDescription.hasSuffix("Still running: DOOMx64vk.exe."), "a game is named, the services are not")
+        XCTAssertEqual(BottleEnv.elapsedSeconds("04-17:50:22"), 4 * 86_400 + 17 * 3600 + 50 * 60 + 22)
+        XCTAssertEqual(BottleEnv.elapsedSeconds("01:05"), 65)
     }
 }

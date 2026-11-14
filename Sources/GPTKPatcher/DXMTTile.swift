@@ -16,11 +16,11 @@ struct DXMTTile: View {
     var body: some View {
         if showsLibrary {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) { SectionLabel("DXMT"); BetaTag() }
+                HStack(spacing: 6) { SectionLabel("DXMT", detail: engine.installedDXMT, strong: true); BetaTag() }
                 libraryTile
             }
         } else {
-            FileTile(label: "DXMT", beta: true, prompt: "Drop a DXMT release here",
+            FileTile(label: "DXMT", labelDetail: engine.installedDXMT, beta: true, prompt: "Drop a DXMT release here",
                      contentType: .archive, fileExtension: "tar.gz",
                      url: engine.importingDXMT,
                      status: engine.dxmtStatus,
@@ -35,31 +35,29 @@ struct DXMTTile: View {
     }
 
     private var libraryTile: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Image(systemName: "square.stack.3d.up.fill")
-                .font(.system(size: 26))
-                .foregroundStyle(Color.accentColor.opacity(targeted ? 1 : 0.85))
-                .frame(width: 40, height: 40)
-            VStack(alignment: .leading, spacing: 3) {
-                Menu {
-                    // "Unchanged" is one of the choices rather than a separate command, so the menu
-                    // is a single list of what this patch will do to DXMT.
-                    Picker("DXMT version", selection: selection) {
-                        Text("Unchanged").tag(DXMTBuild?.none)
-                        ForEach(engine.dxmtBuilds) { build in
-                            Text(build.displayName).tag(Optional(build))
-                        }
-                    }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                    Divider()
-                    Button("Add DXMT Release…", action: openPanel)
-                    if let build = engine.selectedDXMT {
-                        Button("Remove \(build.displayName) from Library", role: .destructive) { engine.removeDXMT(build) }
-                    }
-                } label: {
+        // The whole tile is the menu, so a click anywhere on it opens the list.
+        Menu {
+            // "Unchanged" is one of the choices rather than a separate command, so the menu
+            // is a single list of what this patch will do to DXMT.
+            Picker("DXMT version", selection: selection) {
+                Text("Unchanged").tag(DXMTBuild?.none)
+                ForEach(engine.dxmtBuilds) { build in
+                    Text(build.displayName).tag(Optional(build))
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+            Divider()
+            Button("Add DXMT Release…", action: openPanel)
+            if let build = engine.selectedDXMT {
+                Button("Remove \(build.displayName) from Library", role: .destructive) { engine.removeDXMT(build) }
+            }
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                TileGlyph(text: "DX\nMT", highlighted: targeted)
+                VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 5) {
-                        Text(engine.selectedDXMT?.displayName ?? "Not replacing DXMT")
+                        Text(engine.selectedDXMT?.displayName ?? "Unchanged")
                             .font(.body.weight(.medium))
                             .foregroundStyle(engine.selectedDXMT == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                             .lineLimit(1)
@@ -67,27 +65,26 @@ struct DXMTTile: View {
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
                     }
-                    .contentShape(Rectangle())
+                    Text(caption)
+                        .font(.caption)
+                        .foregroundStyle(targeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(caption)
                 }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("Choose a DXMT version, add another, or remove one")
-                .accessibilityLabel("DXMT version")
-                .accessibilityValue(engine.selectedDXMT?.displayName ?? "none")
-                Text(caption)
-                    .font(.caption)
-                    .foregroundStyle(targeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .help(caption)
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity)
+            .frame(height: FileTile.height)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 14)
-        .frame(maxWidth: .infinity)
-        .frame(height: FileTile.height)
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .help("Choose a DXMT version, add another, or remove one")
+        .accessibilityLabel("DXMT version")
+        .accessibilityValue(engine.selectedDXMT?.displayName ?? "none")
         .modifier(InputTileChrome(targeted: targeted, hovering: hovering, isEmpty: false, isError: false))
         .overlay(alignment: .topTrailing) {
             if engine.selectedDXMT != nil {
