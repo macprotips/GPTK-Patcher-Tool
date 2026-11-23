@@ -71,7 +71,7 @@ enum PatchStep: Int, CaseIterable, Sendable {
         case .verifying: return "Verifying CrossOver"
         case .checkingToolkit: return "Checking the toolkit"
         case .copying: return mode == .copy ? "Copying CrossOver" : "Preparing CrossOver"
-        case .installing: return "Installing toolkit components"
+        case .installing: return "Installing components"
         case .finalizing: return "Applying settings"
         case .signing: return "Signing and verifying the patched app"
         }
@@ -287,16 +287,19 @@ struct PatchJob {
         let carriedSlots: [String]? = (moltenVKSlots.isEmpty ? nil : moltenVKSlots) ?? previous?.moltenVKSlots
         // Worked out here rather than at step 6, so the receipt records what was actually written.
         var settings = request.graphics
-        if let build = request.moltenVK { settings.moltenVK = build.settings }
+        if let build = request.moltenVK, !moltenVKSlots.isEmpty { settings.moltenVK = build.settings }
         let environment = Dictionary(uniqueKeysWithValues:
             settings.assignments.compactMap { key, value in value.map { (key, $0) } })
         let toolkitSource: String? = request.toolkit?.sourceName ?? previous?.toolkitSource
         let toolkitPath: String? = request.toolkit?.lib.path ?? previous?.toolkitPath
         let gptkVersion: String? = installedVersion ?? previous?.gptkD3DMetalVersion
         let carriedAliases: [String] = aliases.isEmpty ? (previous?.dlssAliases ?? []) : aliases
-        let dxmtVersion: String? = request.dxmt?.version ?? previous?.dxmtVersion
-        let moltenVKName: String? = request.moltenVK?.name ?? previous?.moltenVKBuild
-        let moltenVKVersion: String? = request.moltenVK?.version ?? previous?.moltenVKVersion
+        // A build counts only if it went in: a CrossOver without the slot for it is skipped.
+        let dxmt = dxmtStock == nil ? nil : request.dxmt
+        let moltenVK = moltenVKSlots.isEmpty ? nil : request.moltenVK
+        let dxmtVersion: String? = dxmt?.version ?? previous?.dxmtVersion
+        let moltenVKName: String? = moltenVK?.name ?? previous?.moltenVKBuild
+        let moltenVKVersion: String? = moltenVK?.version ?? previous?.moltenVKVersion
         let receipt = PatchReceipt(
             tool: "GPTKPatcher " + Self.toolVersion, date: Date(),
             // Preview builds put a date in CFBundleShortVersionString and the real version in
@@ -324,7 +327,7 @@ struct PatchJob {
         try encoder.encode(receipt).write(to: receiptURL, options: .atomic)
         try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: dst.path)
 
-        // 6. Environment: app-wide in the copy's etc/CrossOver.conf, then per bottle on top.
+        // 8. Environment: app-wide in the copy's etc/CrossOver.conf, then per bottle on top.
         if settings.storeInCopy {
             let conf = copy.globalConfig
             try FileSafety.requireContained(conf, in: dst)
@@ -357,7 +360,7 @@ struct PatchJob {
         try token.checkpoint()
         rollback = nil
 
-        // 7. An in-place patch keeps its name unless renaming was asked for. CrossOver's helpers
+        // 9. An in-place patch keeps its name unless renaming was asked for. CrossOver's helpers
         //    find the app by bundle identifier, so a rename is safe; a taken name is left alone.
         var finalURL = dst
         if request.mode == .inPlace, !request.renameInPlace {
@@ -380,7 +383,7 @@ struct PatchJob {
             }
         }
 
-        // 8. A CrossOver patched where it was downloaded belongs in Applications, as CrossOver itself
+        // 10. A CrossOver patched where it was downloaded belongs in Applications, as CrossOver itself
         //    offers on first launch. Move it there unless something with that name is already there.
         if request.mode == .inPlace, request.moveToApplications, !isInApplicationsFolder(finalURL) {
             let target = request.applicationsFolder.appendingPathComponent(finalURL.lastPathComponent)
@@ -400,8 +403,8 @@ struct PatchJob {
 
         var carries: [String] = []
         if let installedVersion { carries.append("D3DMetal \(installedVersion)") }
-        if let build = request.dxmt { carries.append("DXMT \(build.version)") }
-        if let build = request.moltenVK, !moltenVKSlots.isEmpty { carries.append("MoltenVK “\(build.name)”") }
+        if let build = dxmt { carries.append("DXMT \(build.version)") }
+        if let build = moltenVK { carries.append("MoltenVK “\(build.name)”") }
         log("Done. \(finalURL.lastPathComponent) now carries \(carries.joined(separator: " and ")).")
         return finalURL
     }

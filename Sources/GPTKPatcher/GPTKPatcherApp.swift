@@ -51,9 +51,8 @@ struct GPTKPatcherApp: App {
     }
 }
 
-/// `GPTKPatcher --cli --quit-bottle <name>` ends everything running in that bottle; `--bottle-status <name>` only lists it.
-/// `GPTKPatcher --cli <CrossOver.app> <toolkit.dmg | version | none> [destination.app] [--in-place] [--replace] [--fps N] [--hud] [--dxmt ARCHIVE|VERSION] [--moltenvk FILE|NAME] [--no-copy-env] [--bottle NAME]...`
-/// Runs the same job without the window, for scripting and testing.
+/// `GPTKPatcher --cli …` runs the same job without the window, for scripting and testing.
+/// `--help` prints the full usage.
 enum HeadlessRunner {
     private static func quitBottleAndExit(named name: String, dryRun: Bool) -> Never {
         guard let bottle = BottleEnv.listBottles().first(where: { $0.name == name }) else {
@@ -208,10 +207,10 @@ enum HeadlessRunner {
                     moltenVK = try MoltenVKLibrary.importBuild(URL(fileURLWithPath: mvkArg), token: token) { print($0) }
                 } else if FileManager.default.fileExists(atPath: mvkArg) {
                     throw PatchError.io("\(mvkArg) isn't a MoltenVK build. Pass a libMoltenVK.dylib or the archive it came in.")
-                } else if let stored = MoltenVKLibrary.list().first(where: { $0.name == mvkArg }) {
+                } else if let stored = MoltenVKLibrary.all().first(where: { $0.name == mvkArg }) {
                     moltenVK = stored
                 } else {
-                    let known = MoltenVKLibrary.list().map(\.name).joined(separator: ", ")
+                    let known = MoltenVKLibrary.all().map(\.name).joined(separator: ", ")
                     throw PatchError.io("No MoltenVK build named \(mvkArg) in the library\(known.isEmpty ? "" : " (have: \(known))").")
                 }
             }

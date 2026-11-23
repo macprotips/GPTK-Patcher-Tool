@@ -20,7 +20,7 @@ struct PatchedAppRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if app.patchReplaced {
-                    Text("CrossOver updated itself and replaced the patch. Patch it again to put it back.")
+                    Text("A CrossOver update removed the patch. Patch it again.")
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
@@ -39,7 +39,7 @@ struct PatchedAppRow: View {
                 Image(systemName: "gearshape")
             }
             .controlSize(.small)
-            .help("Options: frame rate cap and Metal HUD")
+            .help("Options: frame rate cap, Metal HUD and Metal 4")
             .accessibilityLabel("Options for \(app.name)")
             .disabled(repairing)
             .popover(isPresented: $showSettings, arrowEdge: .bottom) { PatchedAppSettings(app: app) }

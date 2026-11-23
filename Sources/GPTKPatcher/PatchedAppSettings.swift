@@ -52,7 +52,7 @@ struct PatchedAppSettings: View {
                 Text(app.name).font(.headline)
                 Text("GPTK \(app.gptkVersion)").font(.caption).foregroundStyle(.secondary)
             }
-            .padding(.bottom, 16)
+            .padding(.bottom, 20)
 
             // Target
             VStack(alignment: .leading, spacing: 6) {
@@ -86,10 +86,10 @@ struct PatchedAppSettings: View {
                 }
             }
 
-            Divider().padding(.vertical, 16)
+            Divider().padding(.vertical, 20)
 
             // Settings
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Frame Rate Cap")
@@ -194,9 +194,9 @@ struct PatchedAppSettings: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!isDirty || busy || (values.fpsEnabled && !(1...1000).contains(values.fpsValue)))
             }
-            .padding(.top, 20)
+            .padding(.top, 24)
         }
-        .padding(20)
+        .padding(24)
         .frame(width: 400)
         .onAppear {
             bottles = BottleEnv.listBottles()
@@ -216,7 +216,7 @@ struct PatchedAppSettings: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Programs already running keep the settings they launched with, so the bottle has to quit before these changes can take effect. Unsaved progress in any game may be lost.")
+            Text("The bottle has to quit for the new settings to take effect. Unsaved progress may be lost.")
         }
     }
 

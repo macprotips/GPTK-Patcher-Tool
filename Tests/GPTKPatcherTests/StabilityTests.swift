@@ -1386,4 +1386,37 @@ extension StabilityTests {
         XCTAssertEqual(BottleEnv.elapsedSeconds("04-17:50:22"), 4 * 86_400 + 17 * 3600 + 50 * 60 + 22)
         XCTAssertEqual(BottleEnv.elapsedSeconds("01:05"), 65)
     }
+
+    /// A CrossOver without the DXMT folder skips DXMT, so nothing should claim it went in.
+    func testASkippedDXMTIsNotRecordedAsInstalled() throws {
+        let (app, kit) = try fixture()
+        try fm.removeItem(at: app.sharedSupport.appendingPathComponent("lib/dxmt"))
+        try Shell.check("/usr/bin/codesign", ["--force", "--sign", "-", app.url.path])
+        let result = try PatchJob(request: request(app, kit, dxmt: dxmtBuild("0.80")), log: { _ in }).run()
+        let receipt = try XCTUnwrap(PatchReceipt.read(result.appendingPathComponent(PatchedAppRegistry.receiptPath)))
+        XCTAssertNil(receipt.dxmtVersion)
+        XCTAssertFalse(result.lastPathComponent.contains("DXMT"), result.lastPathComponent)
+    }
+
+    @MainActor func testMoltenVKSetupIsReadWhateverOrderTheOptionsAreIn() throws {
+        defer { UserDefaults.standard.removeObject(forKey: "destination") }
+        let engine = PatchEngine()
+        let build = try XCTUnwrap(MoltenVKLibrary.known(for: "standard"))
+        let doom = Steam.Game(id: "379720", name: "DOOM")
+        engine.steamGames = [doom]
+        let setUp = LaunchOptions.settingUpMoltenVK(in: "", settings: build.settings, argument: "+r_renderapi 1")
+        engine.steamLaunchOptions = [doom.id: FrameCap.apply(30, to: setUp)]
+        XCTAssertTrue(engine.moltenVKIsSetUp(game: doom, for: build), "a cap added afterwards goes in front")
+        engine.steamLaunchOptions = [doom.id: "%command% +r_renderapi 1"]
+        XCTAssertFalse(engine.moltenVKIsSetUp(game: doom, for: build))
+    }
+
+    @MainActor func testOnlyAnInPlacePatchPointsAtAppManagement() {
+        let denied = NSError(domain: NSCocoaErrorDomain, code: CocoaError.fileWriteNoPermission.rawValue)
+        let target = URL(fileURLWithPath: "/Volumes/Games/CrossOver copy.app")
+        XCTAssertTrue(PatchEngine.failure(for: denied, destination: target, inPlace: true).needsPermission)
+        let copy = PatchEngine.failure(for: denied, destination: target, inPlace: false)
+        XCTAssertFalse(copy.needsPermission)
+        XCTAssertFalse(copy.message.contains("App Management"))
+    }
 }

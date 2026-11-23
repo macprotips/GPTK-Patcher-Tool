@@ -22,46 +22,47 @@ notarized). DXMT and MoltenVK support is beta.
 3. Optional: add a DXMT or MoltenVK build. Anything left on *Unchanged* is not touched.
 4. Pick **Duplicate CrossOver** or **Patch Existing**, then click **Patch CrossOver**.
 
-A duplicate is saved to `/Applications` as `CrossOver (GPTK 4.0b2, MoltenVK 1.4.3).app`. Patching
-in place keeps the app's name and path, and a CrossOver update will wipe the patch, so prefer a
-duplicate.
+A duplicate is saved to `/Applications` under a name that lists what it carries, such as
+`CrossOver (GPTK 4.0b3).app`. Patching in place changes your installed CrossOver, and a CrossOver
+update wipes the patch, so a duplicate is the safer choice.
 
 Originals are kept beside the replacements as `.stock`, and a failed or cancelled patch rolls back.
 
 ## Settings
 
-Patched copies appear in **Already Patched Versions**. The gear sets the frame rate cap, the Metal
-Performance HUD and Metal 4, as app defaults or per bottle, where bottle settings win. Quit that
-CrossOver first. Use **Repair Launch** from the right-click menu if macOS ever calls a patched
-copy damaged.
+Patched copies appear under **Already Patched Versions**. The gear sets the frame rate cap, the
+Metal Performance HUD and Metal 4, for the whole app or for one bottle. A bottle's own setting wins.
+Quit that CrossOver first. If macOS ever calls a patched copy damaged, right-click it and choose
+**Repair Launch**.
 
 ## Vulkan games
 
-Doom (2016), Wolfenstein II and Detroit: Become Human need MoltenVK rather than the toolkit or
-DXMT. The included build covers Doom and Wolfenstein. Detroit needs
-[MoltenVK-Detroit](https://github.com/DiAvisoo/MoltenVK-Detroit/releases), dropped in as the `.zip`
-it downloads as, plus the game-side fixes in their instructions.
+Doom (2016), Wolfenstein II and Detroit: Become Human run on MoltenVK, not the toolkit or DXMT.
+The included build covers Doom and Wolfenstein II. Detroit needs
+[MoltenVK-Detroit](https://github.com/DiAvisoo/MoltenVK-Detroit/releases): drop in the `.zip` as
+downloaded, and follow its instructions for the game-side fixes.
 
-The first launch after a swap sits on a black screen for a few minutes while shaders compile.
-Doom also needs `+r_renderapi 1` in its Steam launch options.
+Doom also needs `+r_renderapi 1` in its Steam launch options. The first launch after a swap can
+sit on a black screen for a few minutes while shaders compile.
 
 ## NotProton
 
 Set up a CrossOver in NotProton first, then choose **NotProton** when the app opens. The CrossOver
 NotProton uses is selected for you. Pick the versions and click **Patch NotProton**. NotProton's
-own copy is updated too.
+copy of CrossOver is updated as well, so there is no need to reinstall it there.
 
-Patching in a MoltenVK build also sets up the launch options its games need, and **D3DMetal Frame
-Rate Cap** caps any Steam game. Both change Steam's launch options, which needs Steam to restart,
-or show the text to paste in yourself. The DXMT cap is in NotProton's panel in Steam.
+A MoltenVK build also sets up the launch options its games need, and **D3DMetal Frame Rate Cap**
+caps a game running on D3DMetal (toolkit 4.0 or later). Both edit Steam's launch options, so Steam
+restarts to save them. If Steam is open, you can paste the MoltenVK options in yourself instead.
+The DXMT cap is in NotProton's panel in Steam.
 
 Patching can break games. Don't report those problems to the NotProton developers. To reset, use
 **Remove Everything** in NotProton and set it up again.
 
 ## Undo
 
-Trash a duplicate. For an in-place patch, download CrossOver again from CodeWeavers. Bottles are
-stored separately and are never touched.
+Trash a duplicate. For an in-place patch, download CrossOver again from CodeWeavers. Patching
+never touches your bottles.
 
 ## Building it
 

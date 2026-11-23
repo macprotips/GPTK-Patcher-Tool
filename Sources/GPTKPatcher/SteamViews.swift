@@ -28,9 +28,9 @@ struct FrameCapPopover: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("D3DMetal Frame Rate Cap")
                 .font(.headline)
-                .padding(.bottom, 14)
+                .padding(.bottom, 16)
 
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
                 GridRow {
                     Text("Game:").gridColumnAlignment(.trailing)
                     Picker("Game", selection: $gameID) {
@@ -65,9 +65,9 @@ struct FrameCapPopover: View {
                 .foregroundStyle(engine.launchOptionsError == nil && (engine.frameCapSupported || engine.frameCapAfterPatch)
                                  ? AnyShapeStyle(.secondary) : AnyShapeStyle(.orange))
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 14)
+                .padding(.top, 16)
         }
-        .padding(18)
+        .padding(20)
         .frame(width: 360)
         .onAppear(perform: engine.refreshSteam)
         .onChange(of: gameID) { fps = current > 0 ? current : 60 }
@@ -83,7 +83,7 @@ struct FrameCapPopover: View {
             return "NotProton's D3DMetal is too old for this cap. Patch with Game Porting Toolkit 4.0 or later."
         }
         return engine.launchOptionsError ?? engine.launchOptionsMessage
-            ?? "Saved to Steam launch options. DXMT uses NotProton's own cap."
+            ?? "Goes in the game's Steam launch options. DXMT has its own cap in NotProton."
     }
 
     private func apply() {
@@ -106,13 +106,13 @@ struct SetupNote: View {
             if !games.isEmpty {
                 if engine.moltenVKIsSetUp(for: build) {
                     let names = games.map(\.name).formatted(.list(type: .and))
-                    card("checkmark.circle.fill", .green, "\(names) \(games.count == 1 ? "is" : "are") set up in Steam. Added to the launch options:") {
+                    card(.success, "\(names) \(games.count == 1 ? "is" : "are") set up in Steam. Added to the launch options:") {
                         added
                     }
                 } else {
                     let waiting = games.filter { !engine.moltenVKIsSetUp(game: $0, for: build) }
                     let names = waiting.map(\.name).formatted(.list(type: .and))
-                    card("exclamationmark.circle.fill", .orange, "\(names) \(waiting.count == 1 ? "needs" : "need") these launch options in Steam. Copy them in yourself, or let the app add them, which restarts Steam if it is open.") {
+                    card(.warning, "\(names) \(waiting.count == 1 ? "needs" : "need") these launch options in Steam. Copy them in yourself, or let the app add them, which restarts Steam if it is open.") {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(waiting) { game in
                                 needed(for: game)
@@ -131,7 +131,7 @@ struct SetupNote: View {
                 }
             }
         } else if let setup = build.setup {
-            card("exclamationmark.circle.fill", .orange, setup) {
+            card(.warning, setup) {
                 if let option = build.launchOption {
                     HStack(spacing: 8) {
                         code(option)
@@ -185,21 +185,9 @@ struct SetupNote: View {
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
-    private func card<Controls: View>(_ symbol: String, _ tint: Color, _ text: String,
-                                      @ViewBuilder controls: () -> Controls) -> some View {
-        // The icon, gap and margins of the rows in the result list above, so the two line up.
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: symbol).font(.system(size: 12)).foregroundStyle(tint)
-                Text(text).fixedSize(horizontal: false, vertical: true)
-            }
-            controls().padding(.leading, 22)
-        }
-        .font(.subheadline)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(InputTileChrome(targeted: false, isEmpty: false, isError: false, cornerRadius: 10))
+    private func card<Controls: View>(_ kind: Notice<EmptyView, Controls>.Kind, _ text: String,
+                                      @ViewBuilder controls: @escaping () -> Controls) -> some View {
+        Notice(kind: kind, text: text, action: { EmptyView() }, extra: controls)
     }
 }
 
@@ -226,7 +214,7 @@ private extension View {
             Button(button, action: action)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Steam only keeps launch options changed while it is closed. Any game that is running will quit.")
+            Text("Steam saves launch options only while it is closed. Any running game will quit.")
         }
     }
 }

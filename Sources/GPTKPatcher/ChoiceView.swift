@@ -24,7 +24,7 @@ struct ChoiceView: View {
             .frame(maxWidth: 620)
 
             if let error = engine.notProtonLocateError {
-                Text(error).font(.callout).foregroundStyle(.orange)
+                Notice(.warning, error).frame(maxWidth: 620)
             }
         }
         .frame(maxWidth: .infinity)
